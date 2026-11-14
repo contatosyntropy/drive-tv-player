@@ -215,11 +215,15 @@
     const subtitle = findSubtitle(videoFile);
     if (!subtitle) return;
     try {
-      const url = "https://www.googleapis.com/drive/v3/files/" +
-        encodeURIComponent(subtitle.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("HTTP " + response.status);
+      const url = "/api/subtitle/" + encodeURIComponent(subtitle.id) +
+        "?key=" + encodeURIComponent(config.apiKey);
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || data.message || "HTTP " + response.status);
+      }
       const buffer = await response.arrayBuffer();
+      if (!buffer.byteLength) throw new Error("O arquivo de legenda está vazio.");
       let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\uFEFF/, "");
       if (/\.srt$/i.test(subtitle.name)) {
         content = "WEBVTT\n\n" + content
@@ -240,7 +244,7 @@
       setPlaybackMessage("Legenda carregada: " + subtitle.name);
     } catch (error) {
       console.error("Falha ao carregar legenda:", subtitle.name, error);
-      setPlaybackMessage("O vídeo abriu, mas não foi possível carregar a legenda (" + subtitle.name + "). Confira se o arquivo está compartilhado para acesso.");
+      setPlaybackMessage("Falha ao carregar a legenda (" + subtitle.name + "): " + error.message);
     }
   }
 
