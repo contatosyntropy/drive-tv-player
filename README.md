@@ -25,6 +25,10 @@ O repositório inclui `wrangler.jsonc` e `worker.js`. O Worker entrega os arquiv
 
 O navegador continua reproduzindo os vídeos pelo método direto atual. Apenas as legendas passam pelo Worker.
 
+## Player de vídeo
+
+A interface de reprodução usa Video.js 8, carregado pela CDN oficial. O Video.js padroniza os controles, navegação e tratamento de fontes, mas utiliza a decodificação de mídia do navegador/webOS. Ele não instala codecs nem converte arquivos MKV/AC3. A compatibilidade de cada combinação de contêiner e codec continua dependendo da TV.
+
 ## Observações importantes
 
 - O site lista vídeos pela Drive API, mas a reprodução usa o endpoint de download do Google Drive. O Drive não é uma plataforma de streaming: arquivos grandes, limites de cota, confirmações de download e busca dentro do vídeo podem falhar.
