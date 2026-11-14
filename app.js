@@ -317,7 +317,7 @@
     const readRange = async (label, range, url = sourceUrl) => {
       const response = await fetch(url, {
         method: "GET",
-        headers: { Range: range, "Accept-Encoding": "identity" },
+        headers: { Range: range },
         cache: "no-store"
       });
       const headers = readHeaders(response);
@@ -367,7 +367,7 @@
       result.externalReference = await readRange(
         "MKV externo conhecido",
         "bytes=900000-900255",
-        "https://pnb-website-bucket.s3.us-east-2.amazonaws.com/samples/videos/mkv/sample-video-480x270-1mb.mkv"
+        apiUrl("/api/reference-mkv")
       );
     } catch (error) {
       result.externalReference = { error: error.message };
