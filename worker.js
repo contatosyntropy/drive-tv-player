@@ -221,6 +221,33 @@ export default {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
       }
 
+      if (url.pathname === "/api/reference-mkv") {
+        const headers = new Headers({ "Accept-Encoding": "identity" });
+        for (const name of ["Range", "If-Range"]) {
+          const value = request.headers.get(name);
+          if (value) headers.set(name, value);
+        }
+        try {
+          const upstream = await fetch(
+            "https://pnb-website-bucket.s3.us-east-2.amazonaws.com/samples/videos/mkv/sample-video-480x270-1mb.mkv",
+            { method: request.method, headers, redirect: "follow" }
+          );
+          const responseHeaders = new Headers(CORS_HEADERS);
+          for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Content-Encoding", "ETag", "Last-Modified"]) {
+            const value = upstream.headers.get(name);
+            if (value) responseHeaders.set(name, value);
+          }
+          responseHeaders.set("Cache-Control", "no-store, no-transform");
+          if (request.method === "HEAD") {
+            if (upstream.body) await upstream.body.cancel();
+            return new Response(null, { status: upstream.status, headers: responseHeaders });
+          }
+          return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
+        } catch (error) {
+          return jsonError("Falha ao consultar o MKV externo de referência: " + error.message, 502);
+        }
+      }
+
       const videoMatch = url.pathname.match(/^\/api\/video\/([A-Za-z0-9_-]+)(?:\/([^/]+))?$/);
       const subtitleMatch = url.pathname.match(/^\/api\/subtitle\/([A-Za-z0-9_-]+)$/);
       const match = videoMatch || subtitleMatch;
