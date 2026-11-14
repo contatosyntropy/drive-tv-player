@@ -22,6 +22,40 @@
 
   function setMessage(text) { message.textContent = text; }
 
+  const folderMime = "application/vnd.google-apps.folder";
+
+  async function listFolder(folderId, folderPath, visited) {
+    if (visited.has(folderId)) return [];
+    visited.add(folderId);
+    let pageToken = "";
+    const collected = [];
+    do {
+      const query = "'" + folderId + "' in parents and trashed = false";
+      const fields = "nextPageToken,files(id,name,mimeType,size,thumbnailLink,webViewLink,parents)";
+      let url = "https://www.googleapis.com/drive/v3/files?q=" + encodeURIComponent(query) +
+        "&pageSize=1000&orderBy=name&fields=" + encodeURIComponent(fields) +
+        "&key=" + encodeURIComponent(config.apiKey);
+      if (pageToken) url += "&pageToken=" + encodeURIComponent(pageToken);
+      const response = await fetch(url);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error?.message || "Erro HTTP " + response.status);
+      }
+      const data = await response.json();
+      for (const file of (data.files || [])) {
+        const fullPath = folderPath ? folderPath + " / " + file.name : file.name;
+        if (file.mimeType === folderMime) {
+          collected.push(...await listFolder(file.id, fullPath, visited));
+        } else {
+          file.folderPath = folderPath;
+          collected.push(file);
+        }
+      }
+      pageToken = data.nextPageToken || "";
+    } while (pageToken);
+    return collected;
+  }
+
   async function loadLibrary() {
     grid.innerHTML = "";
     if (!config.folderId || !config.apiKey || config.apiKey.includes("COLE_SUA")) {
@@ -30,23 +64,15 @@
       return;
     }
     status.textContent = "Carregando…";
-    setMessage("Buscando vídeos no Google Drive…");
+    setMessage("Buscando vídeos e subpastas no Google Drive…");
     try {
-      const q = encodeURIComponent("'" + config.folderId + "' in parents and trashed = false");
-      const fields = encodeURIComponent("files(id,name,mimeType,size,thumbnailLink,webViewLink)");
-      const url = "https://www.googleapis.com/drive/v3/files?q=" + q + "&pageSize=1000&orderBy=name&fields=" + fields + "&key=" + encodeURIComponent(config.apiKey);
-      const response = await fetch(url);
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error?.message || "Erro HTTP " + response.status);
-      }
-      const data = await response.json();
-      const files = data.files || [];
+      const files = await listFolder(config.folderId, "", new Set());
       items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
+      items.sort((a, b) => ((a.folderPath || "") + a.name).localeCompare((b.folderPath || "") + b.name, "pt-BR"));
       render();
       status.textContent = items.length + " vídeo(s)";
-      setMessage(items.length ? "" : "Nenhum vídeo encontrado nessa pasta.");
+      setMessage(items.length ? "" : "Nenhum vídeo encontrado nessa pasta ou em suas subpastas.");
     } catch (error) {
       console.error(error);
       status.textContent = "Falha ao carregar";
@@ -84,8 +110,40 @@
 
   function findSubtitle(videoFile) {
     const videoBase = videoFile.name.replace(/\.[^.]+$/, "").trim().toLocaleLowerCase();
-    return subtitleFiles.find(file => file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase);
+    const sameFolder = subtitleFiles.find(file =>
+      (file.folderPath || "") === (videoFile.folderPath || "") &&
+      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+    );
+    if (sameFolder) return sameFolder;
+    const matches = subtitleFiles.filter(file =>
+      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+    );
+    return matches.length === 1 ? matches[0] : null;
   }
+
+  function decodeSubtitle(buffer, contentType) {
+    const bytes = new Uint8Array(buffer);
+    if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+      return new TextDecoder("utf-8").decode(bytes.subarray(3));
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+      return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+      return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+    }
+    const declared = (contentType || "").match(/charset=([^;]+)/i);
+    if (declared) {
+      try { return new TextDecoder(declared[1].replace(/["']/g, "").trim()).decode(bytes); } catch (_) {}
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (_) {
+      return new TextDecoder("windows-1252").decode(bytes);
+    }
+  }
+
+
 
   async function loadSubtitle(videoFile) {
     clearSubtitle();
@@ -96,7 +154,8 @@
         encodeURIComponent(subtitle.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
       const response = await fetch(url);
       if (!response.ok) throw new Error("HTTP " + response.status);
-      let content = (await response.text()).replace(/^\uFEFF/, "");
+      const buffer = await response.arrayBuffer();
+      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\uFEFF/, "");
       if (/\.srt$/i.test(subtitle.name)) {
         content = "WEBVTT\n\n" + content
           .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")
