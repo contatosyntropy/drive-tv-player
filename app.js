@@ -387,13 +387,12 @@
     video.dataset.index = String(index);
     clearSubtitle();
 
-    // Entrega direta do Google Drive ao player nativo da LG.
-    // Não fazemos proxy/streaming pelo Worker: o player recebe a URL de mídia
-    // original do Drive, assim como no teste MKV externo que funcionou.
-    const sourceUrl = "https://www.googleapis.com/drive/v3/files/" +
-      encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+    // O Worker resolve a confirmação de download de arquivos grandes do Drive
+    // e entrega ao player nativo somente o fluxo real de mídia.
+    const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
+      "?key=" + encodeURIComponent(config.apiKey);
 
-    setPlaybackMessage("Abrindo o arquivo diretamente do Google Drive no reprodutor da LG…");
+    setPlaybackMessage("Preparando o fluxo de mídia do Google Drive…");
     const nativeResult = await launchNativePlayer(file, sourceUrl);
 
     if (nativeResult.ok) {
