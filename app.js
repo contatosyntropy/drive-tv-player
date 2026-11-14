@@ -279,7 +279,7 @@
     if (notice && notice.textContent.startsWith("Toque em")) notice.textContent = "";
   });
   video.addEventListener("error", () => {
-    const file = items[Number(video.dataset.index)];
+    const file = visibleVideos[Number(video.dataset.index)];
     if (!file) return;
     if (video.dataset.fallbackUsed !== "true") {
       video.dataset.fallbackUsed = "true";
