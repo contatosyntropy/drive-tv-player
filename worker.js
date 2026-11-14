@@ -68,7 +68,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode) {
     responseHeaders.set("Cache-Control", "no-store");
     responseHeaders.set("X-Content-Type-Options", "nosniff");
 
-    return new Response(mode === "HEAD" ? null : upstream.body, {
+    return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,
       headers: responseHeaders
@@ -83,7 +83,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      if (request.method !== "GET" && request.method !== "HEAD") {
+      if (request.method !== "GET") {
         return jsonError("Método não permitido.", 405);
       }
 
