@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#08090d">
   <title>Drive TV Player</title>
+  <link rel="stylesheet" href="https://vjs.zencdn.net/8.23.4/video-js.css">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -24,10 +25,11 @@
   </main>
   <section id="player" class="player hidden" aria-label="Reprodutor de vídeo">
     <div class="player-head"><button id="back" class="icon-button">← <span>Biblioteca</span></button><div id="now-playing" class="now-playing"></div><button id="next-episode" class="icon-button next-episode-button hidden">▶ Reproduzir próximo episódio</button></div>
-    <video id="video" controls playsinline preload="metadata"></video>
+    <video id="video" class="video-js vjs-big-play-centered" controls playsinline preload="metadata"></video>
     <div class="player-foot"><span>← / → : voltar ou avançar 10 segundos</span><span>ESC : voltar à biblioteca</span></div>
   </section>
   <script src="./config.js"></script>
+  <script src="https://vjs.zencdn.net/8.23.4/video.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
