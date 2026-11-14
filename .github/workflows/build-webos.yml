@@ -45,6 +45,7 @@ jobs:
           draw.rounded_rectangle((4, 4, 76, 76), radius=16, fill="#8b5cf6")
           draw.polygon([(31, 21), (31, 59), (60, 40)], fill="#ffffff")
           image.save("build/webos-app/icon.png")
+          image.resize((130, 130)).save("build/webos-app/largeicon.png")
           PY
 
       - name: Package IPK
