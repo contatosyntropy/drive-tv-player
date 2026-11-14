@@ -5,32 +5,10 @@
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
-  const videoPlayer = window.videojs ? window.videojs(video, {
-    controls: true,
-    responsive: true,
-    fluid: false,
-    preload: "metadata",
-    playbackRates: [0.75, 1, 1.25, 1.5, 2],
-    controlBar: { volumePanel: false, pictureInPictureToggle: false }
-  }) : null;
   const nowPlaying = document.getElementById("now-playing");
   const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
   const subtitlePattern = /\.(srt|vtt)$/i;
 
-  function getVideoMimeType(file) {
-    const extension = (file.name || "").split(".").pop().toLowerCase();
-    const knownTypes = {
-      mp4: "video/mp4",
-      m4v: "video/mp4",
-      // MKV: não força MIME. Deixa o navegador identificar o tipo real recebido do Drive.
-      webm: "video/webm",
-      ogv: "video/ogg",
-      ogg: "video/ogg",
-      mov: "video/quicktime"
-    };
-    return knownTypes[extension] ||
-      (file.mimeType && file.mimeType.startsWith("video/") ? file.mimeType : "");
-  }
   let items = [];
   let subtitleFiles = [];
   let folders = [];
@@ -283,13 +261,7 @@
     clearSubtitle();
     // Mantém o Google Drive como origem; Video.js gerencia a interface, não transcodifica codecs.
     const sourceUrl = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
-    const isMkv = /\\.mkv$/i.test(file.name || "");
-    const sourceType = getVideoMimeType(file);
-    const source = sourceType ? { src: sourceUrl, type: sourceType } : { src: sourceUrl };
-    // MKV: bypass the Video.js source selector, which may reject Matroska
-    // before the native webOS media engine gets a chance to try it.
-    if (isMkv || !videoPlayer) video.src = sourceUrl;
-    else videoPlayer.src(source);
+    video.src = sourceUrl;
     video.load();
     loadSubtitle(file);
     video.play().catch(error => {
@@ -301,11 +273,8 @@
   function closePlayer() {
     video.pause();
     clearSubtitle();
-    if (videoPlayer) videoPlayer.reset();
-    else {
-      video.removeAttribute("src");
-      video.load();
-    }
+    video.removeAttribute("src");
+    video.load();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
   }
@@ -338,11 +307,7 @@
       video.dataset.fallbackUsed = "true";
       const fallbackUrl = "https://www.googleapis.com/drive/v3/files/" +
         encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
-      const isMkv = /\\.mkv$/i.test(file.name || "");
-      const sourceType = getVideoMimeType(file);
-      const fallbackSource = sourceType ? { src: fallbackUrl, type: sourceType } : { src: fallbackUrl };
-      if (isMkv || !videoPlayer) video.src = fallbackUrl;
-      else videoPlayer.src(fallbackSource);
+      video.src = fallbackUrl;
       video.load();
       video.play().catch(() => {});
       return;
