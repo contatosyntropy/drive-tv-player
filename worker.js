@@ -11,12 +11,79 @@ function jsonError(message, status = 502, details = {}) {
   });
 }
 
+async function proxyDriveFile(request, url, fileId, apiKey, mode) {
+  const driveUrl = new URL(
+    "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId)
+  );
+  driveUrl.searchParams.set("alt", "media");
+  driveUrl.searchParams.set("key", apiKey);
+
+  const headers = new Headers({
+    "Referer": request.headers.get("Referer") || url.origin + "/"
+  });
+
+  // O player HTML5 usa Range para buscar trechos do vídeo e permitir seek.
+  for (const name of ["Range", "If-Range"]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+
+  try {
+    const upstream = await fetch(driveUrl.toString(), {
+      method: "GET",
+      redirect: "follow",
+      headers
+    });
+
+    const contentType = upstream.headers.get("Content-Type") || "";
+    if (!upstream.ok && contentType.includes("application/json")) {
+      const data = await upstream.json().catch(() => ({}));
+      return jsonError(
+        data.error?.message || "Google Drive respondeu com HTTP " + upstream.status + ".",
+        upstream.status >= 400 && upstream.status < 500 ? upstream.status : 502,
+        { upstreamStatus: upstream.status }
+      );
+    }
+
+    if (upstream.ok && contentType.includes("application/json")) {
+      const data = await upstream.json().catch(() => ({}));
+      return jsonError(
+        data.error?.message || "O Google Drive retornou uma resposta inesperada.",
+        502
+      );
+    }
+
+    const responseHeaders = new Headers();
+    for (const name of [
+      "Content-Type",
+      "Content-Length",
+      "Content-Range",
+      "Accept-Ranges",
+      "ETag",
+      "Last-Modified"
+    ]) {
+      const value = upstream.headers.get(name);
+      if (value) responseHeaders.set(name, value);
+    }
+    responseHeaders.set("Cache-Control", "no-store");
+    responseHeaders.set("X-Content-Type-Options", "nosniff");
+
+    return new Response(mode === "HEAD" ? null : upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders
+    });
+  } catch (error) {
+    return jsonError("Falha de comunicação com o Google Drive: " + error.message, 502);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      if (request.method !== "GET") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
         return jsonError("Método não permitido.", 405);
       }
 
@@ -25,64 +92,25 @@ export default {
         return jsonError("Origem não autorizada.", 403);
       }
 
-      const match = url.pathname.match(/^\/api\/subtitle\/([A-Za-z0-9_-]+)$/);
+      const videoMatch = url.pathname.match(/^\/api\/video\/([A-Za-z0-9_-]+)$/);
+      const subtitleMatch = url.pathname.match(/^\/api\/subtitle\/([A-Za-z0-9_-]+)$/);
+      const match = videoMatch || subtitleMatch;
       if (!match) {
-        return jsonError("Rota de legenda não encontrada.", 404);
+        return jsonError("Rota de mídia não encontrada.", 404);
       }
 
-      const fileId = match[1];
       const apiKey = url.searchParams.get("key");
       if (!apiKey) {
         return jsonError("Chave da API do Google Drive não informada.", 400);
       }
 
-      const driveUrl = new URL(
-        "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId)
+      return proxyDriveFile(
+        request,
+        url,
+        match[1],
+        apiKey,
+        videoMatch ? "video" : "subtitle"
       );
-      driveUrl.searchParams.set("alt", "media");
-      driveUrl.searchParams.set("key", apiKey);
-
-      try {
-        const upstream = await fetch(driveUrl.toString(), {
-          method: "GET",
-          redirect: "follow",
-          headers: {
-            "Referer": request.headers.get("Referer") || url.origin + "/"
-          }
-        });
-
-        if (!upstream.ok) {
-          const raw = await upstream.text();
-          let message = "Google Drive respondeu com HTTP " + upstream.status + ".";
-          try {
-            const data = JSON.parse(raw);
-            message = data.error?.message || message;
-          } catch (_) {
-            if (raw.trim()) message += " " + raw.trim().slice(0, 240);
-          }
-          return jsonError(message, 502, { upstreamStatus: upstream.status });
-        }
-
-        const contentType = upstream.headers.get("Content-Type") || "";
-        if (contentType.includes("application/json")) {
-          const data = await upstream.json().catch(() => ({}));
-          return jsonError(
-            data.error?.message || "O Google Drive retornou uma resposta inesperada.",
-            502
-          );
-        }
-
-        return new Response(upstream.body, {
-          status: 200,
-          headers: {
-            "Content-Type": contentType || "text/plain; charset=utf-8",
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
-      } catch (error) {
-        return jsonError("Falha de comunicação com o Google Drive: " + error.message, 502);
-      }
     }
 
     return env.ASSETS.fetch(request);
