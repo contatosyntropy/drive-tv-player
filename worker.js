@@ -13,8 +13,8 @@ function jsonError(message, status = 502, details = {}) {
 
 function getCookieHeader(response) {
   const raw = response.headers.get("Set-Cookie") || "";
-  const match = raw.match(/(download_warning[^=;,]*=[^;,\s]+)/i);
-  return match ? match[1] : "";
+  const matches = raw.match(/download_warning[^=;,\\s]*=[^;,\\s]+/gi) || [];
+  return matches.join("; ");
 }
 
 function decodeHtml(value) {
@@ -30,7 +30,9 @@ function getHtmlAttribute(tag, attribute) {
 }
 
 function parseDownloadForm(html, fileId, baseUrl) {
-  const formMatch = html.match(/<form\b[^>]*>([\s\S]*?)<\/form>/i);
+  // O Drive pode responder com um formulário contendo parâmetros ocultos
+  // (confirm, uuid, at etc.). Preserve todos eles na URL final.
+  const formMatch = html.match(/<form\b[^>]*>[\s\S]*?<\/form>/i);
   if (formMatch) {
     const formTag = formMatch[0].slice(0, formMatch[0].indexOf(">") + 1);
     const action = getHtmlAttribute(formTag, "action") || baseUrl;
@@ -38,7 +40,7 @@ function parseDownloadForm(html, fileId, baseUrl) {
     const params = new URLSearchParams(target.search);
     const inputPattern = /<input\b[^>]*>/gi;
     let input;
-    while ((input = inputPattern.exec(formMatch[1]))) {
+    while ((input = inputPattern.exec(formMatch[0]))) {
       const name = getHtmlAttribute(input[0], "name");
       const value = getHtmlAttribute(input[0], "value");
       if (name) params.set(name, value);
@@ -49,32 +51,33 @@ function parseDownloadForm(html, fileId, baseUrl) {
     return target.toString();
   }
 
-  // Algumas versões do Drive apresentam o link de confirmação em vez de um form.
-  const hrefPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
+  // Algumas versões apresentam um link em vez de um formulário.
+  const anchorPattern = /<a\b[^>]*>/gi;
   let anchor;
-  while ((anchor = hrefPattern.exec(html))) {
-    const href = decodeHtml(anchor[1]);
-    if (/confirm=|drive\.usercontent\.google\.com\/download/i.test(href)) {
-      return new URL(href, baseUrl).toString();
+  while ((anchor = anchorPattern.exec(html))) {
+    const href = getHtmlAttribute(anchor[0], "href");
+    if (!href) continue;
+    const candidate = new URL(href, baseUrl);
+    if (candidate.hostname.endsWith("google.com") &&
+        (candidate.searchParams.has("confirm") || candidate.hostname === "drive.usercontent.google.com")) {
+      if (!candidate.searchParams.has("id")) candidate.searchParams.set("id", fileId);
+      if (!candidate.searchParams.has("export")) candidate.searchParams.set("export", "download");
+      return candidate.toString();
     }
   }
 
-  const confirm = html.match(/[?&]confirm=([\\w-]+)/i)?.[1] ||
-    html.match(/name=["']confirm["']\s+value=["']([^"']+)["']/i)?.[1];
-  if (confirm) {
-    const target = new URL("https://drive.usercontent.google.com/download");
-    target.searchParams.set("id", fileId);
-    target.searchParams.set("export", "download");
-    target.searchParams.set("confirm", confirm);
-    return target.toString();
-  }
+  // Tokens também podem aparecer em links/scripts ou inputs fora do form.
+  const tokenMatch =
+    html.match(/[?&]confirm=([^&"'\s]+)/i) ||
+    html.match(/name=["']confirm["'][^>]*value=["']([^"']+)["']/i) ||
+    html.match(/["']confirm["']\s*:\s*["']([^"']+)["']/i);
+  const token = tokenMatch?.[1] ? decodeHtml(tokenMatch[1]) : "";
 
-  // O Drive usa o token "t" em algumas páginas de confirmação simplificadas.
-  if (/download|virus|large file|arquivo muito grande/i.test(html)) {
+  if (token || /download|virus|large file|arquivo muito grande/i.test(html)) {
     const target = new URL("https://drive.usercontent.google.com/download");
     target.searchParams.set("id", fileId);
     target.searchParams.set("export", "download");
-    target.searchParams.set("confirm", "t");
+    target.searchParams.set("confirm", token || "t");
     return target.toString();
   }
   return null;
