@@ -472,33 +472,28 @@
     const file = visibleVideos[index];
     if (!file) return;
 
-    // Finaliza a fonte anterior antes de abrir a próxima.
+    // A reprodução passa a ser feita pelo visualizador oficial do Google Drive.
+    // /preview entrega a página do player, não o arquivo de mídia bruto.
     video.dataset.index = "-1";
     video.pause();
     video.removeAttribute("src");
     video.load();
     clearSubtitle();
 
+    const preview = document.getElementById("drive-preview");
     nowPlaying.textContent = file.name;
     document.getElementById("next-episode").classList.add("hidden");
     video.dataset.index = String(index);
-    video.dataset.fallbackUsed = "false";
-    video.dataset.subtitleLoaded = "false";
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
 
-    // Toda a mídia passa pelo Worker: ele resolve a confirmação do Drive
-    // para arquivos grandes e mantém o streaming por requisições Range.
-    const sourceUrl = videoSourceUrl(file);
-    video.src = sourceUrl;
-    video.load();
-    video.play().catch(error => {
-      console.warn("Reprodução não iniciada automaticamente:", error);
-      setPlaybackMessage("Toque em ▶ no controle do vídeo para iniciar a reprodução.");
-    });
+    preview.src = "https://drive.google.com/file/d/" +
+      encodeURIComponent(file.id) + "/preview";
   }
 
   function closePlayer() {
+    const preview = document.getElementById("drive-preview");
+    if (preview) preview.src = "about:blank";
     video.pause();
     clearSubtitle();
     video.removeAttribute("src");
