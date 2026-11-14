@@ -5,6 +5,14 @@
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
+  const videoPlayer = window.videojs ? window.videojs(video, {
+    controls: true,
+    responsive: true,
+    fluid: false,
+    preload: "metadata",
+    playbackRates: [0.75, 1, 1.25, 1.5, 2],
+    controlBar: { volumePanel: false, pictureInPictureToggle: false }
+  }) : null;
   const nowPlaying = document.getElementById("now-playing");
   const supported = /\.(mp4|m4v|webm|ogv|ogg|mov)$/i;
   const subtitlePattern = /\.(srt|vtt)$/i;
@@ -258,8 +266,10 @@
     video.dataset.index = String(index);
     video.dataset.fallbackUsed = "false";
     clearSubtitle();
-    // Mantém o link direto do Drive como fonte principal, que era o método funcional antes da regressão.
-    video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
+    // Mantém o Google Drive como origem; Video.js gerencia a interface, não transcodifica codecs.
+    const sourceUrl = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
+    if (videoPlayer) videoPlayer.src({ src: sourceUrl });
+    else video.src = sourceUrl;
     video.load();
     loadSubtitle(file);
     video.play().catch(error => {
@@ -271,8 +281,11 @@
   function closePlayer() {
     video.pause();
     clearSubtitle();
-    video.removeAttribute("src");
-    video.load();
+    if (videoPlayer) videoPlayer.reset();
+    else {
+      video.removeAttribute("src");
+      video.load();
+    }
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
   }
@@ -303,8 +316,10 @@
     if (!file) return;
     if (video.dataset.fallbackUsed !== "true") {
       video.dataset.fallbackUsed = "true";
-      video.src = "https://www.googleapis.com/drive/v3/files/" +
+      const fallbackUrl = "https://www.googleapis.com/drive/v3/files/" +
         encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+      if (videoPlayer) videoPlayer.src({ src: fallbackUrl });
+      else video.src = fallbackUrl;
       video.load();
       video.play().catch(() => {});
       return;
