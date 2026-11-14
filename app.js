@@ -378,47 +378,90 @@
     });
   }
 
+  function directDriveUrls(file) {
+    const id = encodeURIComponent(file.id);
+    return [
+      { label: "Link /view", url: "https://drive.google.com/file/d/" + id + "/view" },
+      { label: "Download direto", url: "https://drive.google.com/uc?export=download&id=" + id }
+    ];
+  }
+
+  async function tryDirectSource(file, source) {
+    setPlaybackMessage("Testando " + source.label + "…");
+    if (window.webOS && window.webOS.service &&
+        typeof window.webOS.service.request === "function") {
+      const nativeResult = await launchNativePlayer(file, source.url);
+      if (nativeResult.ok) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+        player.classList.add("hidden");
+        document.getElementById("library").classList.remove("hidden");
+        status.textContent = "Reprodução transferida para a TV (" + source.label + ")";
+        return;
+      }
+      setPlaybackMessage("O player da TV recusou " + source.label + ": " +
+        (nativeResult.error?.errorText || nativeResult.error?.message || "erro não identificado"));
+      return;
+    }
+    video.pause();
+    video.removeAttribute("src");
+    video.src = source.url;
+    video.load();
+    video.play().then(() => {
+      setPlaybackMessage("Reproduzindo pelo navegador: " + source.label);
+    }).catch(error => {
+      setPlaybackMessage("Falha no navegador com " + source.label + ": " +
+        (error.message || "formato, permissão ou confirmação do Google Drive"));
+    });
+  }
+
   async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
-
     nowPlaying.textContent = file.name;
     document.getElementById("next-episode").classList.add("hidden");
     video.dataset.index = String(index);
     clearSubtitle();
-
-    // O Worker resolve a confirmação de download de arquivos grandes do Drive
-    // e entrega ao player nativo somente o fluxo real de mídia.
-    const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
-      "?key=" + encodeURIComponent(config.apiKey);
-
-    setPlaybackMessage("Preparando o fluxo de mídia do Google Drive…");
-    const nativeResult = await launchNativePlayer(file, sourceUrl);
-
-    if (nativeResult.ok) {
-      // The native app takes the foreground; keep the HTML5 player stopped.
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-      player.classList.add("hidden");
-      document.getElementById("library").classList.remove("hidden");
-      status.textContent = "Reprodução transferida para a TV";
-      console.info("Player nativo da LG iniciado:", nativeResult.response);
-      return;
-    }
-
-    console.warn("Não foi possível iniciar o player nativo da LG:", nativeResult.error);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
-    video.src = sourceUrl;
-    video.load();
-    loadSubtitle(file);
-    const reason = nativeResult.error?.errorText || nativeResult.error?.message || "API indisponível";
-    setPlaybackMessage("O player nativo não pôde ser acionado (" + reason + "). Tentando o reprodutor do navegador.");
-    video.play().catch(error => {
-      console.warn("Reprodução no navegador não iniciada automaticamente:", error);
-      setPlaybackMessage("O player nativo não está acessível e o navegador não iniciou o vídeo. " + reason);
+
+    let controls = document.getElementById("direct-source-tests");
+    if (!controls) {
+      controls = document.createElement("div");
+      controls.id = "direct-source-tests";
+      controls.className = "direct-source-tests";
+      player.querySelector(".player-head").insertBefore(
+        controls, document.getElementById("next-episode"));
+    }
+    controls.innerHTML = "";
+    const hint = document.createElement("span");
+    hint.className = "source-test-hint";
+    hint.textContent = "Testar origem:";
+    controls.appendChild(hint);
+
+    for (const source of directDriveUrls(file)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "icon-button source-test-button";
+      button.textContent = source.label;
+      button.addEventListener("click", () => tryDirectSource(file, source));
+      controls.appendChild(button);
+    }
+
+    const workerButton = document.createElement("button");
+    workerButton.type = "button";
+    workerButton.className = "icon-button source-test-button";
+    workerButton.textContent = "Worker (atual)";
+    workerButton.addEventListener("click", () => {
+      const url = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
+        "?key=" + encodeURIComponent(config.apiKey);
+      tryDirectSource(file, { label: "Worker", url });
     });
+    controls.appendChild(workerButton);
+    video.removeAttribute("src");
+    video.load();
+    setPlaybackMessage("No computador, os botões testam no navegador. Na TV, cada opção é enviada ao player nativo.");
   }
 
   function closePlayer() {
