@@ -255,10 +255,20 @@
   }
 
   function nativePlayerPayload(file, sourceUrl) {
-    const mime = file.mimeType || (
-      /\.mkv$/i.test(file.name) ? "video/x-matroska" :
-      /\.(webm)$/i.test(file.name) ? "video/webm" : "video/mp4"
-    );
+    // Prefer the actual container extension: Drive can return a generic MIME type.
+    const extension = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
+    const mimeByExtension = {
+      mkv: "video/x-matroska",
+      mp4: "video/mp4",
+      m4v: "video/mp4",
+      webm: "video/webm",
+      mov: "video/quicktime",
+      avi: "video/x-msvideo",
+      mpg: "video/mpeg",
+      mpeg: "video/mpeg",
+      ts: "video/mp2t"
+    };
+    const mime = mimeByExtension[extension] || file.mimeType || "application/octet-stream";
     return {
       fullPath: new URL(sourceUrl, window.location.href).href,
       artist: "",
