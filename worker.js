@@ -97,7 +97,7 @@ async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
     const value = request.headers.get(name);
     if (value) rangeHeaders.set(name, value);
   }
-  // Media players precisam de bytes idênticos aos do arquivo original.\n  // Evita compressão automática do upstream, que pode invalidar offsets HTTP Range.\n  rangeHeaders.set("Accept-Encoding", "identity");\n  if (request.method === "HEAD") rangeHeaders.set("Range", "bytes=0-0");
+  // Media players precisam de bytes idênticos aos do arquivo original.\n  // Evita compressão automática do upstream, que pode invalidar offsets HTTP Range.\n  rangeHeaders.set("Accept-Encoding", "identity");\n  if (request.method === "HEAD") rangeHeaders.set("Range", "bytes=0-4095");
 
   // Legendas continuam usando a API oficial. Vídeos usam o endpoint de
   // download do Drive, que permite tratar a confirmação de arquivos grandes.
