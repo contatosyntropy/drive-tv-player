@@ -11,7 +11,7 @@ function jsonError(message, status = 502, details = {}) {
   });
 }
 
-async function proxyDriveFile(request, url, fileId, apiKey, mode) {
+async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "") {
   const driveUrl = new URL(
     "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId)
   );
@@ -65,6 +65,16 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+    if (mode === "video") {
+      const extension = (fileName.match(/\\.([^.]+)$/) || [])[1]?.toLowerCase();
+      const mimeTypes = {
+        mkv: "video/x-matroska", mp4: "video/mp4", m4v: "video/mp4",
+        webm: "video/webm", mov: "video/quicktime", avi: "video/x-msvideo",
+        mpg: "video/mpeg", mpeg: "video/mpeg", ts: "video/mp2t"
+      };
+      if (mimeTypes[extension]) responseHeaders.set("Content-Type", mimeTypes[extension]);
+      responseHeaders.set("Content-Disposition", "inline");
+    }
     responseHeaders.set("Cache-Control", "no-store");
     responseHeaders.set("X-Content-Type-Options", "nosniff");
 
@@ -83,7 +93,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      if (request.method !== "GET") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
         return jsonError("Método não permitido.", 405);
       }
 
@@ -109,7 +119,8 @@ export default {
         url,
         match[1],
         apiKey,
-        videoMatch ? "video" : "subtitle"
+        videoMatch ? "video" : "subtitle",
+        videoMatch && videoMatch[2] ? decodeURIComponent(videoMatch[2]) : ""
       );
     }
 
