@@ -15,6 +15,7 @@
   let currentFolderId = config.folderId;
   let visibleVideos = [];
   let subtitleUrl = null;
+  let subtitleLoadToken = 0;
 
   const formatSize = bytes => {
     if (!bytes) return "";
@@ -174,6 +175,7 @@
   }
 
   function clearSubtitle() {
+    subtitleLoadToken++;
     video.querySelectorAll("track").forEach(track => track.remove());
     if (subtitleUrl) URL.revokeObjectURL(subtitleUrl);
     subtitleUrl = null;
@@ -218,6 +220,7 @@
 
   async function loadSubtitle(videoFile) {
     clearSubtitle();
+    const requestToken = subtitleLoadToken;
     const subtitle = findSubtitle(videoFile);
     if (!subtitle) return;
     try {
@@ -229,6 +232,7 @@
         throw new Error(data.error || data.message || "HTTP " + response.status);
       }
       const buffer = await response.arrayBuffer();
+      if (requestToken !== subtitleLoadToken) return;
       if (!buffer.byteLength) throw new Error("O arquivo de legenda está vazio.");
       let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\uFEFF/, "");
       if (/\.srt$/i.test(subtitle.name)) {
@@ -238,6 +242,7 @@
       } else if (!content.trimStart().startsWith("WEBVTT")) {
         content = "WEBVTT\n\n" + content;
       }
+      if (requestToken !== subtitleLoadToken) return;
       subtitleUrl = URL.createObjectURL(new Blob([content], { type: "text/vtt;charset=utf-8" }));
       const track = document.createElement("track");
       track.kind = "subtitles";
@@ -249,6 +254,7 @@
       track.track.mode = "showing";
       setPlaybackMessage("Legenda carregada: " + subtitle.name);
     } catch (error) {
+      if (requestToken !== subtitleLoadToken) return;
       console.error("Falha ao carregar legenda:", subtitle.name, error);
       setPlaybackMessage("Falha ao carregar a legenda (" + subtitle.name + "): " + error.message);
     }
@@ -459,11 +465,19 @@
   function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
+
+    // Finaliza a fonte anterior antes de abrir a próxima.
+    video.dataset.index = "-1";
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    clearSubtitle();
+
     nowPlaying.textContent = file.name;
     document.getElementById("next-episode").classList.add("hidden");
     video.dataset.index = String(index);
     video.dataset.fallbackUsed = "false";
-    clearSubtitle();
+    video.dataset.subtitleLoaded = "false";
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
 
@@ -473,7 +487,6 @@
       encodeURIComponent(file.id);
     video.src = sourceUrl;
     video.load();
-    loadSubtitle(file);
     video.play().catch(error => {
       console.warn("Reprodução não iniciada automaticamente:", error);
       setPlaybackMessage("Toque em ▶ no controle do vídeo para iniciar a reprodução.");
@@ -509,6 +522,14 @@
   video.addEventListener("playing", () => {
     const notice = document.getElementById("playback-message");
     if (notice && notice.textContent.startsWith("Toque em")) notice.textContent = "";
+
+    // Carrega a legenda em paralelo somente após o vídeo iniciar.
+    const index = Number(video.dataset.index);
+    const file = visibleVideos[index];
+    if (file && video.dataset.subtitleLoaded !== "true") {
+      video.dataset.subtitleLoaded = "true";
+      loadSubtitle(file);
+    }
   });
   video.addEventListener("error", () => {
     const file = visibleVideos[Number(video.dataset.index)];
