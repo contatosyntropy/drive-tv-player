@@ -14,8 +14,23 @@
     controlBar: { volumePanel: false, pictureInPictureToggle: false }
   }) : null;
   const nowPlaying = document.getElementById("now-playing");
-  const supported = /\.(mp4|m4v|webm|ogv|ogg|mov)$/i;
+  const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
   const subtitlePattern = /\.(srt|vtt)$/i;
+
+  function getVideoMimeType(file) {
+    const extension = (file.name || "").split(".").pop().toLowerCase();
+    const knownTypes = {
+      mp4: "video/mp4",
+      m4v: "video/mp4",
+      mkv: "video/x-matroska",
+      webm: "video/webm",
+      ogv: "video/ogg",
+      ogg: "video/ogg",
+      mov: "video/quicktime"
+    };
+    return knownTypes[extension] ||
+      (file.mimeType && file.mimeType.startsWith("video/") ? file.mimeType : "");
+  }
   let items = [];
   let subtitleFiles = [];
   let folders = [];
@@ -268,7 +283,9 @@
     clearSubtitle();
     // Mantém o Google Drive como origem; Video.js gerencia a interface, não transcodifica codecs.
     const sourceUrl = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
-    if (videoPlayer) videoPlayer.src({ src: sourceUrl });
+    const sourceType = getVideoMimeType(file);
+    const source = sourceType ? { src: sourceUrl, type: sourceType } : { src: sourceUrl };
+    if (videoPlayer) videoPlayer.src(source);
     else video.src = sourceUrl;
     video.load();
     loadSubtitle(file);
@@ -318,7 +335,9 @@
       video.dataset.fallbackUsed = "true";
       const fallbackUrl = "https://www.googleapis.com/drive/v3/files/" +
         encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
-      if (videoPlayer) videoPlayer.src({ src: fallbackUrl });
+      const sourceType = getVideoMimeType(file);
+      const fallbackSource = sourceType ? { src: fallbackUrl, type: sourceType } : { src: fallbackUrl };
+      if (videoPlayer) videoPlayer.src(fallbackSource);
       else video.src = fallbackUrl;
       video.load();
       video.play().catch(() => {});
