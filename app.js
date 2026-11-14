@@ -249,23 +249,108 @@
     }
   }
 
-  function play(index) {
+  function nativePlayerPayload(file, sourceUrl) {
+    const mime = file.mimeType || (
+      /\\.mkv$/i.test(file.name) ? "video/x-matroska" :
+      /\\.(webm)$/i.test(file.name) ? "video/webm" : "video/mp4"
+    );
+    return {
+      fullPath: new URL(sourceUrl, window.location.href).href,
+      artist: "",
+      subtitle: "",
+      dlnaInfo: {
+        flagVal: 4096,
+        cleartextSize: String(file.size || -1),
+        contentLength: String(file.size || -1),
+        opVal: 1,
+        protocolInfo: "http-get:*:" + mime + ":DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+        duration: 0
+      },
+      mediaType: "VIDEO",
+      thumbnail: file.thumbnailLink || "",
+      deviceType: "DMR",
+      album: "",
+      fileName: file.name.replace(/\\.[^.]+$/, ""),
+      lastPlayPosition: -1
+    };
+  }
+
+  function launchNativePlayer(file, sourceUrl) {
+    const payload = nativePlayerPayload(file, sourceUrl);
+    const params = { payload: [payload] };
+
+    // webOS TV 6.x uses the Media Discovery app for the built-in media player.
+    if (window.webOS && window.webOS.service &&
+        typeof window.webOS.service.request === "function") {
+      return new Promise(resolve => {
+        window.webOS.service.request("luna://com.webos.applicationManager", {
+          method: "launch",
+          parameters: {
+            id: "com.webos.app.mediadiscovery",
+            params
+          },
+          onSuccess: response => resolve({ ok: true, response }),
+          onFailure: error => resolve({ ok: false, error })
+        });
+      });
+    }
+
+    if (window.webOSDev && typeof window.webOSDev.launch === "function") {
+      return new Promise(resolve => {
+        window.webOSDev.launch({
+          id: "com.webos.app.mediadiscovery",
+          params,
+          onSuccess: response => resolve({ ok: true, response }),
+          onFailure: error => resolve({ ok: false, error })
+        });
+      });
+    }
+
+    return Promise.resolve({
+      ok: false,
+      unavailable: true,
+      error: { errorText: "As APIs webOS não estão disponíveis nesta sessão do navegador." }
+    });
+  }
+
+  async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
+
     nowPlaying.textContent = file.name;
     document.getElementById("next-episode").classList.add("hidden");
-    player.classList.remove("hidden");
-    document.getElementById("library").classList.add("hidden");
     video.dataset.index = String(index);
     clearSubtitle();
+
     const sourceUrl = "/api/video/" + encodeURIComponent(file.id) +
       "?key=" + encodeURIComponent(config.apiKey);
+
+    setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
+    const nativeResult = await launchNativePlayer(file, sourceUrl);
+
+    if (nativeResult.ok) {
+      // The native app takes the foreground; keep the HTML5 player stopped.
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      player.classList.add("hidden");
+      document.getElementById("library").classList.remove("hidden");
+      status.textContent = "Reprodução transferida para a TV";
+      console.info("Player nativo da LG iniciado:", nativeResult.response);
+      return;
+    }
+
+    console.warn("Não foi possível iniciar o player nativo da LG:", nativeResult.error);
+    player.classList.remove("hidden");
+    document.getElementById("library").classList.add("hidden");
     video.src = sourceUrl;
     video.load();
     loadSubtitle(file);
+    const reason = nativeResult.error?.errorText || nativeResult.error?.message || "API indisponível";
+    setPlaybackMessage("O player nativo não pôde ser acionado (" + reason + "). Tentando o reprodutor do navegador.");
     video.play().catch(error => {
-      console.warn("Reprodução não iniciada automaticamente:", error);
-      setPlaybackMessage("Toque em ▶ no controle do vídeo para iniciar a reprodução.");
+      console.warn("Reprodução no navegador não iniciada automaticamente:", error);
+      setPlaybackMessage("O player nativo não está acessível e o navegador não iniciou o vídeo. " + reason);
     });
   }
 
