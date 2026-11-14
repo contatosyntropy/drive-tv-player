@@ -254,8 +254,8 @@
     video.dataset.index = String(index);
     video.dataset.fallbackUsed = "false";
     clearSubtitle();
-    video.src = "https://www.googleapis.com/drive/v3/files/" +
-      encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+    // Prioriza o link direto do Drive, método usado na versão que já funcionava.
+    video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
     video.load();
     loadSubtitle(file);
     video.play().catch(error => {
@@ -299,7 +299,8 @@
     if (!file) return;
     if (video.dataset.fallbackUsed !== "true") {
       video.dataset.fallbackUsed = "true";
-      video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
+      video.src = "https://www.googleapis.com/drive/v3/files/" +
+        encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
       video.load();
       video.play().catch(() => {});
       return;
