@@ -487,13 +487,13 @@
 
     const preview = document.getElementById("drive-preview");
     nowPlaying.textContent = file.name;
-    document.getElementById("next-episode").classList.add("hidden");
     video.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
 
     preview.src = "https://drive.google.com/file/d/" +
       encodeURIComponent(file.id) + "/preview";
+    preview.focus();
   }
 
   function closePlayer() {
@@ -505,58 +505,6 @@
     video.load();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
-  }
-
-  const nativeCurrentButton = document.getElementById("native-current");
-  if (nativeCurrentButton) {
-    nativeCurrentButton.addEventListener("click", async () => {
-      const index = Number(video.dataset.index);
-      const file = visibleVideos[index];
-      if (!file) {
-        setPlaybackMessage("Selecione um episódio antes de testar o player nativo.");
-        return;
-      }
-      nativeCurrentButton.disabled = true;
-      setPlaybackMessage("Enviando o arquivo original ao player nativo da LG…");
-      try {
-        const result = await launchNativePlayer(file, videoSourceUrl(file));
-        if (result.ok) {
-          // A resposta do serviço confirma apenas o lançamento do Media Discovery,
-          // não o início da reprodução. Preserve o Preview como fallback.
-          status.textContent = "Media Player aberto. Se o vídeo não iniciar, volte e use o Preview.";
-          setPlaybackMessage("A TV aceitou abrir o Media Player. O Preview foi mantido como alternativa.");
-          console.info("Solicitação ao player nativo:", result.response);
-        } else {
-          const reason = result.error?.errorText || result.error?.message || "erro não identificado";
-          setPlaybackMessage("A TV não aceitou a solicitação do player nativo: " + reason + ". A reprodução pelo Preview continua disponível.");
-          console.error("Falha ao abrir arquivo original no player nativo:", result.error);
-        }
-      } catch (error) {
-        setPlaybackMessage("Falha ao solicitar o player nativo: " + error.message);
-        console.error(error);
-      } finally {
-        nativeCurrentButton.disabled = false;
-      }
-    });
-  }
-
-  const diagnoseCurrentButton = document.getElementById("diagnose-current");
-  if (diagnoseCurrentButton) {
-    diagnoseCurrentButton.addEventListener("click", async () => {
-      const file = visibleVideos[Number(video.dataset.index)];
-      if (!file) return;
-      diagnoseCurrentButton.disabled = true;
-      setPlaybackMessage("Verificando HTTP Range no início, meio e final do arquivo. Isso não baixa o vídeo inteiro…");
-      try {
-        const report = await diagnoseMediaDelivery(videoSourceUrl(file), file);
-        setPlaybackMessage(report.summary);
-        status.textContent = "Diagnóstico concluído — confira os intervalos HTTP.";
-      } catch (error) {
-        setPlaybackMessage("Falha no diagnóstico: " + error.message);
-      } finally {
-        diagnoseCurrentButton.disabled = false;
-      }
-    });
   }
 
   document.getElementById("back").addEventListener("click", closePlayer);
@@ -576,100 +524,15 @@
     notice.textContent = text;
   }
 
-  video.addEventListener("playing", () => {
-    const notice = document.getElementById("playback-message");
-    if (notice && notice.textContent.startsWith("Toque em")) notice.textContent = "";
-
-    // Carrega a legenda em paralelo somente após o vídeo iniciar.
-    const index = Number(video.dataset.index);
-    const file = visibleVideos[index];
-    if (file && video.dataset.subtitleLoaded !== "true") {
-      video.dataset.subtitleLoaded = "true";
-      loadSubtitle(file);
-    }
-  });
-  video.addEventListener("error", () => {
-    const file = visibleVideos[Number(video.dataset.index)];
-    if (!file) return;
-
-    const code = video.error?.code;
-    const detail = code === 4
-      ? "O player não reconheceu o conteúdo entregue pelo intermediário do Google Drive. Confira o compartilhamento e a confirmação de download do arquivo."
-      : "O intermediário não conseguiu entregar o vídeo. Verifique se o arquivo está compartilhado para qualquer pessoa com o link.";
-    setPlaybackMessage(detail);
-    console.error("Falha na entrega do vídeo pelo Worker:", file.name, video.error);
-  });
-
-  video.addEventListener("ended", () => {
-    const next = Number(video.dataset.index) + 1;
-    const nextButton = document.getElementById("next-episode");
-    if (next < visibleVideos.length) {
-      nextButton.classList.remove("hidden");
-      nextButton.focus();
-    } else {
-      setPlaybackMessage("Você chegou ao final desta pasta.");
-    }
-  });
   document.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
-    if (event.key === "Escape" || event.key === "Backspace") {
-      event.preventDefault(); closePlayer();
-    } else if (event.key === "ArrowRight") {
-      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 10);
-    } else if (event.key === "ArrowLeft") {
-      video.currentTime = Math.max(0, video.currentTime - 10);
+    // webOS TVs commonly report the remote's Back key as keyCode 461.
+    if (event.key === "Escape" || event.key === "Backspace" ||
+        event.key === "GoBack" || event.keyCode === 461) {
+      event.preventDefault();
+      closePlayer();
     }
   });
-
-  // Diagnostic: test the LG native player independently from Google Drive.
-  const nativeTestButton = document.createElement("button");
-  nativeTestButton.type = "button";
-  nativeTestButton.className = "icon-button";
-  nativeTestButton.textContent = "Testar player LG";
-  nativeTestButton.addEventListener("click", async () => {
-    status.textContent = "Testando player nativo…";
-    const testFile = {
-      name: "sintel-trailer.mp4",
-      size: -1,
-      mimeType: "video/mp4",
-      thumbnailLink: ""
-    };
-    const result = await launchNativePlayer(testFile, "https://media.w3.org/2010/05/sintel/trailer.mp4");
-    if (result.ok) {
-      status.textContent = "Player LG aberto — verifique se o MP4 reproduz.";
-      console.info("Teste do player nativo:", result.response);
-    } else {
-      status.textContent = "Falha ao abrir player LG: " + (result.error?.errorText || result.error?.message || "erro desconhecido");
-      console.error("Teste do player nativo falhou:", result.error);
-    }
-  });
-  const mkvTestButton = document.createElement("button");
-  mkvTestButton.type = "button";
-  mkvTestButton.className = "icon-button";
-  mkvTestButton.textContent = "Testar MKV externo";
-  mkvTestButton.addEventListener("click", async () => {
-    status.textContent = "Testando MKV público no player LG…";
-    const testFile = {
-      name: "sample-video-480x270-1mb.mkv",
-      size: 947682,
-      mimeType: "video/x-matroska",
-      thumbnailLink: ""
-    };
-    const testUrl = "https://pnb-website-bucket.s3.us-east-2.amazonaws.com/samples/videos/mkv/sample-video-480x270-1mb.mkv";
-    const result = await launchNativePlayer(testFile, testUrl);
-    if (result.ok) {
-      status.textContent = "Player LG aberto com MKV externo — verifique se reproduz.";
-      console.info("Teste MKV externo:", result.response);
-    } else {
-      status.textContent = "Falha ao abrir player LG com MKV: " + (result.error?.errorText || result.error?.message || "erro desconhecido");
-      console.error("Teste MKV externo falhou:", result.error);
-    }
-  });
-  const topActions = document.querySelector(".top-actions");
-  if (topActions) {
-    topActions.insertBefore(mkvTestButton, document.getElementById("refresh"));
-    topActions.insertBefore(nativeTestButton, mkvTestButton);
-  }
 
   loadLibrary();
 })();
