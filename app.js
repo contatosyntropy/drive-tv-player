@@ -251,8 +251,8 @@
 
   function nativePlayerPayload(file, sourceUrl) {
     const mime = file.mimeType || (
-      /\\.mkv$/i.test(file.name) ? "video/x-matroska" :
-      /\\.(webm)$/i.test(file.name) ? "video/webm" : "video/mp4"
+      /\.mkv$/i.test(file.name) ? "video/x-matroska" :
+      /\.(webm)$/i.test(file.name) ? "video/webm" : "video/mp4"
     );
     return {
       fullPath: new URL(sourceUrl, window.location.href).href,
@@ -270,7 +270,7 @@
       thumbnail: file.thumbnailLink || "",
       deviceType: "DMR",
       album: "",
-      fileName: file.name.replace(/\\.[^.]+$/, ""),
+      fileName: file.name.replace(/\.[^.]+$/, ""),
       lastPlayPosition: -1
     };
   }
