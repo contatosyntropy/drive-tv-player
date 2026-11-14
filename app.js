@@ -386,8 +386,19 @@
     ];
   }
 
+  function openDirectSource(source) {
+    // Abre a URL fora do elemento <video>. Assim o navegador pode exibir a
+    // confirmação do Drive ou iniciar o download sem exigir suporte a MKV.
+    const opened = window.open(source.url, "_blank", "noopener");
+    if (opened) {
+      setPlaybackMessage(source.label + " aberto em uma nova aba. Observe se o Drive mostra uma confirmação ou inicia o download.");
+    } else {
+      setPlaybackMessage("O navegador bloqueou a nova aba. Permita pop-ups para este site e tente novamente.");
+    }
+  }
+
   async function tryDirectSource(file, source) {
-    setPlaybackMessage("Testando " + source.label + "…");
+    setPlaybackMessage("Enviando " + source.label + " ao player nativo da TV…");
     if (window.webOS && window.webOS.service &&
         typeof window.webOS.service.request === "function") {
       const nativeResult = await launchNativePlayer(file, source.url);
@@ -404,16 +415,7 @@
         (nativeResult.error?.errorText || nativeResult.error?.message || "erro não identificado"));
       return;
     }
-    video.pause();
-    video.removeAttribute("src");
-    video.src = source.url;
-    video.load();
-    video.play().then(() => {
-      setPlaybackMessage("Reproduzindo pelo navegador: " + source.label);
-    }).catch(error => {
-      setPlaybackMessage("Falha no navegador com " + source.label + ": " +
-        (error.message || "formato, permissão ou confirmação do Google Drive"));
-    });
+    setPlaybackMessage("Este teste abre o player nativo da TV. No computador, use os botões de abrir origem ou diagnosticar Worker; o navegador pode não reproduzir MKV.");
   }
 
   async function play(index) {
@@ -445,19 +447,38 @@
       button.type = "button";
       button.className = "icon-button source-test-button";
       button.textContent = source.label;
-      button.addEventListener("click", () => tryDirectSource(file, source));
+      button.addEventListener("click", () => openDirectSource(source));
       controls.appendChild(button);
     }
+
+    const workerUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
+      "?key=" + encodeURIComponent(config.apiKey);
+
+    const diagnoseButton = document.createElement("button");
+    diagnoseButton.type = "button";
+    diagnoseButton.className = "icon-button source-test-button";
+    diagnoseButton.textContent = "Diagnosticar Worker";
+    diagnoseButton.addEventListener("click", async () => {
+      diagnoseButton.disabled = true;
+      diagnoseButton.textContent = "Analisando…";
+      setPlaybackMessage("Consultando HEAD e GET Range (bytes=0-1) do Worker. Veja também o console do navegador para os detalhes.");
+      try {
+        const diagnostic = await diagnoseMediaDelivery(workerUrl);
+        setPlaybackMessage("Diagnóstico do Worker: " + diagnostic.summary + ". Detalhes completos no console (F12).");
+      } catch (error) {
+        setPlaybackMessage("Não foi possível concluir o diagnóstico: " + error.message);
+      } finally {
+        diagnoseButton.disabled = false;
+        diagnoseButton.textContent = "Diagnosticar Worker";
+      }
+    });
+    controls.appendChild(diagnoseButton);
 
     const workerButton = document.createElement("button");
     workerButton.type = "button";
     workerButton.className = "icon-button source-test-button";
-    workerButton.textContent = "Worker (atual)";
-    workerButton.addEventListener("click", () => {
-      const url = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
-        "?key=" + encodeURIComponent(config.apiKey);
-      tryDirectSource(file, { label: "Worker", url });
-    });
+    workerButton.textContent = "Reproduzir Worker";
+    workerButton.addEventListener("click", () => tryDirectSource(file, { label: "Worker", url: workerUrl }));
     controls.appendChild(workerButton);
     video.removeAttribute("src");
     video.load();
