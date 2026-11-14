@@ -7,7 +7,10 @@
   const video = document.getElementById("video");
   const nowPlaying = document.getElementById("now-playing");
   const supported = /\.(mp4|m4v|webm|ogv|ogg|mov)$/i;
+  const subtitlePattern = /\.(srt|vtt)$/i;
   let items = [];
+  let subtitleFiles = [];
+  let subtitleUrl = null;
 
   const formatSize = bytes => {
     if (!bytes) return "";
@@ -38,7 +41,9 @@
         throw new Error(data.error?.message || "Erro HTTP " + response.status);
       }
       const data = await response.json();
-      items = (data.files || []).filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
+      const files = data.files || [];
+      items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
+      subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
       render();
       status.textContent = items.length + " vídeo(s)";
       setMessage(items.length ? "" : "Nenhum vídeo encontrado nessa pasta.");
@@ -71,6 +76,50 @@
     });
   }
 
+  function clearSubtitle() {
+    video.querySelectorAll("track").forEach(track => track.remove());
+    if (subtitleUrl) URL.revokeObjectURL(subtitleUrl);
+    subtitleUrl = null;
+  }
+
+  function findSubtitle(videoFile) {
+    const videoBase = videoFile.name.replace(/\.[^.]+$/, "").trim().toLocaleLowerCase();
+    return subtitleFiles.find(file => file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase);
+  }
+
+  async function loadSubtitle(videoFile) {
+    clearSubtitle();
+    const subtitle = findSubtitle(videoFile);
+    if (!subtitle) return;
+    try {
+      const url = "https://www.googleapis.com/drive/v3/files/" +
+        encodeURIComponent(subtitle.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      let content = (await response.text()).replace(/^\uFEFF/, "");
+      if (/\.srt$/i.test(subtitle.name)) {
+        content = "WEBVTT\n\n" + content
+          .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")
+          .replace(/^\s*\d+\s*$/gm, "");
+      } else if (!content.trimStart().startsWith("WEBVTT")) {
+        content = "WEBVTT\n\n" + content;
+      }
+      subtitleUrl = URL.createObjectURL(new Blob([content], { type: "text/vtt;charset=utf-8" }));
+      const track = document.createElement("track");
+      track.kind = "subtitles";
+      track.label = "Português";
+      track.srclang = "pt";
+      track.src = subtitleUrl;
+      track.default = true;
+      video.appendChild(track);
+      track.track.mode = "showing";
+      setPlaybackMessage("Legenda carregada: " + subtitle.name);
+    } catch (error) {
+      console.error("Falha ao carregar legenda:", subtitle.name, error);
+      setPlaybackMessage("O vídeo abriu, mas não foi possível carregar a legenda (" + subtitle.name + "). Confira se o arquivo está compartilhado para acesso.");
+    }
+  }
+
   function play(index) {
     const file = items[index];
     if (!file) return;
@@ -79,10 +128,11 @@
     document.getElementById("library").classList.add("hidden");
     video.dataset.index = String(index);
     video.dataset.fallbackUsed = "false";
-    // Primeiro tenta a entrega de mídia oficial da Drive API.
+    clearSubtitle();
     video.src = "https://www.googleapis.com/drive/v3/files/" +
       encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
     video.load();
+    loadSubtitle(file);
     video.play().catch(error => {
       console.warn("Reprodução não iniciada automaticamente:", error);
       setPlaybackMessage("Toque em ▶ no controle do vídeo para iniciar a reprodução.");
@@ -91,6 +141,7 @@
 
   function closePlayer() {
     video.pause();
+    clearSubtitle();
     video.removeAttribute("src");
     video.load();
     player.classList.add("hidden");
@@ -110,11 +161,13 @@
     notice.textContent = text;
   }
 
-  video.addEventListener("playing", () => setPlaybackMessage(""));
+  video.addEventListener("playing", () => {
+    const notice = document.getElementById("playback-message");
+    if (notice && notice.textContent.startsWith("Toque em")) notice.textContent = "";
+  });
   video.addEventListener("error", () => {
     const file = items[Number(video.dataset.index)];
     if (!file) return;
-    // Alguns arquivos públicos ainda podem funcionar pelo link direto do Drive.
     if (video.dataset.fallbackUsed !== "true") {
       video.dataset.fallbackUsed = "true";
       video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
