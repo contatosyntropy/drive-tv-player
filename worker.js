@@ -13,7 +13,7 @@ function jsonError(message, status = 502, details = {}) {
 
 function getCookieHeader(response) {
   const raw = response.headers.get("Set-Cookie") || "";
-  const match = raw.match(/(download_warning[^=;,]*=[^;,s]+)/i);
+  const match = raw.match(/(download_warning[^=;,]*=[^;,\\s]+)/i);
   return match ? match[1] : "";
 }
 
