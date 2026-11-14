@@ -283,10 +283,13 @@
     clearSubtitle();
     // Mantém o Google Drive como origem; Video.js gerencia a interface, não transcodifica codecs.
     const sourceUrl = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
+    const isMkv = /\\.mkv$/i.test(file.name || "");
     const sourceType = getVideoMimeType(file);
     const source = sourceType ? { src: sourceUrl, type: sourceType } : { src: sourceUrl };
-    if (videoPlayer) videoPlayer.src(source);
-    else video.src = sourceUrl;
+    // MKV: bypass the Video.js source selector, which may reject Matroska
+    // before the native webOS media engine gets a chance to try it.
+    if (isMkv || !videoPlayer) video.src = sourceUrl;
+    else videoPlayer.src(source);
     video.load();
     loadSubtitle(file);
     video.play().catch(error => {
@@ -335,10 +338,11 @@
       video.dataset.fallbackUsed = "true";
       const fallbackUrl = "https://www.googleapis.com/drive/v3/files/" +
         encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+      const isMkv = /\\.mkv$/i.test(file.name || "");
       const sourceType = getVideoMimeType(file);
       const fallbackSource = sourceType ? { src: fallbackUrl, type: sourceType } : { src: fallbackUrl };
-      if (videoPlayer) videoPlayer.src(fallbackSource);
-      else video.src = fallbackUrl;
+      if (isMkv || !videoPlayer) video.src = fallbackUrl;
+      else videoPlayer.src(fallbackSource);
       video.load();
       video.play().catch(() => {});
       return;
