@@ -508,10 +508,6 @@
   }
 
   document.getElementById("back").addEventListener("click", closePlayer);
-  document.getElementById("next-episode").addEventListener("click", () => {
-    const next = Number(video.dataset.index) + 1;
-    if (next < visibleVideos.length) play(next);
-  });
   document.getElementById("refresh").addEventListener("click", loadLibrary);
   function setPlaybackMessage(text) {
     let notice = document.getElementById("playback-message");
