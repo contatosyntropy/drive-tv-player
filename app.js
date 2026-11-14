@@ -476,33 +476,39 @@
     const file = visibleVideos[index];
     if (!file) return;
 
-    // A reprodução passa a ser feita pelo visualizador oficial do Google Drive.
-    // /preview entrega a página do player, não o arquivo de mídia bruto.
-    video.dataset.index = "-1";
+    clearSubtitle();
     video.pause();
     video.removeAttribute("src");
     video.load();
-    clearSubtitle();
 
-    const preview = document.getElementById("drive-preview");
     video.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
 
-    preview.src = "https://drive.google.com/file/d/" +
-      encodeURIComponent(file.id) + "/preview";
-    preview.focus();
+    // O Worker entrega o arquivo binário puro via Drive API e suporta Range.
+    video.src = videoSourceUrl(file);
+    video.load();
+    loadSubtitle(file);
+
+    const playback = video.play();
+    if (playback && typeof playback.catch === "function") {
+      playback.catch(error => {
+        console.warn("Reprodução automática não iniciada:", error);
+        setPlaybackMessage("Pressione OK/Play no controle remoto para iniciar. " + error.message);
+      });
+    }
   }
 
   function closePlayer() {
-    const preview = document.getElementById("drive-preview");
-    if (preview) preview.src = "about:blank";
     video.pause();
     clearSubtitle();
     video.removeAttribute("src");
     video.load();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
+    const selected = Number(video.dataset.index);
+    const cards = grid.querySelectorAll(".video-card");
+    if (Number.isInteger(selected) && cards[selected]) cards[selected].focus();
   }
 
   document.addEventListener("keydown", event => {
@@ -527,15 +533,6 @@
     notice.textContent = text;
   }
 
-  document.addEventListener("keydown", event => {
-    if (player.classList.contains("hidden")) return;
-    // webOS TVs commonly report the remote's Back key as keyCode 461.
-    if (event.key === "Escape" || event.key === "Backspace" ||
-        event.key === "GoBack" || event.keyCode === 461) {
-      event.preventDefault();
-      closePlayer();
-    }
-  });
 
   loadLibrary();
 })();

@@ -69,3 +69,41 @@
 }
 .player-foot{display:none!important}
 .player video.legacy-video{display:none!important}
+
+
+/* Reprodução direta pelo elemento HTML5 video, sem interface do Google Drive. */
+.player {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100vw;
+  height: 100vh;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  background: #000;
+}
+.player video.native-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100vw;
+  max-height: 100vh;
+  margin: 0;
+  object-fit: contain;
+  background: #000;
+}
+#playback-message {
+  position: absolute;
+  z-index: 2;
+  left: 3vw;
+  right: 3vw;
+  bottom: 3vh;
+  padding: 10px 14px;
+  color: #fff;
+  background: rgba(0,0,0,.78);
+  border-radius: 8px;
+}

@@ -92,66 +92,32 @@ function parseDownloadForm(html, fileId, baseUrl) {
 }
 
 async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
-  const rangeHeaders = new Headers();
+  const headers = new Headers();
   for (const name of ["Range", "If-Range"]) {
     const value = request.headers.get(name);
-    if (value) rangeHeaders.set(name, value);
+    if (value) headers.set(name, value);
   }
-  // Media players precisam de bytes idênticos aos do arquivo original.\n  // Evita compressão automática do upstream, que pode invalidar offsets HTTP Range.\n  rangeHeaders.set("Accept-Encoding", "identity");\n  if (request.method === "HEAD") rangeHeaders.set("Range", "bytes=0-4095");
+  headers.set("Accept-Encoding", "identity");
 
-  // Legendas continuam usando a API oficial. Vídeos usam o endpoint de
-  // download do Drive, que permite tratar a confirmação de arquivos grandes.
-  if (mode !== "video") {
-    const apiUrl = new URL("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId));
-    apiUrl.searchParams.set("alt", "media");
-    apiUrl.searchParams.set("key", apiKey);
-    return fetch(apiUrl.toString(), { method: "GET", redirect: "follow", headers: rangeHeaders });
-  }
+  // Conteúdo binário pelo endpoint oficial da Drive API. O Worker repassa
+  // Range ao Google e transmite o corpo sem armazenar o vídeo em memória.
+  const driveUrl = new URL(
+    "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId)
+  );
+  driveUrl.searchParams.set("alt", "media");
+  driveUrl.searchParams.set("key", apiKey);
+  driveUrl.searchParams.set("supportsAllDrives", "true");
 
-  const downloadUrl = new URL("https://drive.google.com/uc");
-  downloadUrl.searchParams.set("export", "download");
-  downloadUrl.searchParams.set("id", fileId);
+  // O elemento <video> pode consultar HEAD antes de iniciar o streaming.
+  // Um GET mínimo permite obter o tamanho total via Content-Range.
+  if (request.method === "HEAD") headers.set("Range", "bytes=0-0");
 
-  const initial = await fetch(downloadUrl.toString(), {
+  return fetch(driveUrl.toString(), {
     method: "GET",
     redirect: "follow",
-    headers: rangeHeaders
+    headers
   });
-  const initialType = initial.headers.get("Content-Type") || "";
-  if (!initialType.toLowerCase().includes("text/html")) return initial;
-
-  const html = await initial.text();
-  const confirmedUrl = parseDownloadForm(html, fileId, initial.url || downloadUrl.toString());
-  if (!confirmedUrl) {
-    return jsonError(
-      "O Google Drive apresentou uma página intermediária, mas não foi possível identificar a confirmação de download. Verifique se o arquivo está compartilhado para qualquer pessoa com o link.",
-      502,
-      { upstreamStatus: initial.status, upstreamContentType: initialType }
-    );
-  }
-
-  const cookie = getCookieHeader(initial);
-  const confirmedHeaders = new Headers(rangeHeaders);
-  confirmedHeaders.set("Referer", initial.url || downloadUrl.toString());
-  if (cookie) confirmedHeaders.set("Cookie", cookie);
-
-  const confirmed = await fetch(confirmedUrl, {
-    method: "GET",
-    redirect: "follow",
-    headers: confirmedHeaders
-  });
-  const confirmedType = (confirmed.headers.get("Content-Type") || "").toLowerCase();
-  if (confirmedType.includes("text/html")) {
-    const body = await confirmed.text();
-    return jsonError(
-      "O Google Drive não liberou o conteúdo do arquivo após a confirmação de download.",
-      502,
-      { upstreamStatus: confirmed.status, responsePreview: body.slice(0, 300) }
-    );
-  }
-  return confirmed;
 }
-
 async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "") {
   try {
     const upstream = await fetchDriveMedia(request, url, fileId, apiKey, mode, fileName);
