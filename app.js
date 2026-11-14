@@ -502,6 +502,41 @@
     document.getElementById("library").classList.remove("hidden");
   }
 
+  const nativeCurrentButton = document.getElementById("native-current");
+  if (nativeCurrentButton) {
+    nativeCurrentButton.addEventListener("click", async () => {
+      const index = Number(video.dataset.index);
+      const file = visibleVideos[index];
+      if (!file) {
+        setPlaybackMessage("Selecione um episódio antes de testar o player nativo.");
+        return;
+      }
+      nativeCurrentButton.disabled = true;
+      setPlaybackMessage("Enviando o arquivo original ao player nativo da LG…");
+      try {
+        const result = await launchNativePlayer(file, videoSourceUrl(file));
+        if (result.ok) {
+          const preview = document.getElementById("drive-preview");
+          if (preview) preview.src = "about:blank";
+          video.pause();
+          player.classList.add("hidden");
+          document.getElementById("library").classList.remove("hidden");
+          status.textContent = "Solicitação enviada ao player nativo. Verifique a reprodução na TV.";
+          console.info("Solicitação ao player nativo:", result.response);
+        } else {
+          const reason = result.error?.errorText || result.error?.message || "erro não identificado";
+          setPlaybackMessage("A TV não aceitou a solicitação do player nativo: " + reason + ". A reprodução pelo Preview continua disponível.");
+          console.error("Falha ao abrir arquivo original no player nativo:", result.error);
+        }
+      } catch (error) {
+        setPlaybackMessage("Falha ao solicitar o player nativo: " + error.message);
+        console.error(error);
+      } finally {
+        nativeCurrentButton.disabled = false;
+      }
+    });
+  }
+
   document.getElementById("back").addEventListener("click", closePlayer);
   document.getElementById("next-episode").addEventListener("click", () => {
     const next = Number(video.dataset.index) + 1;
