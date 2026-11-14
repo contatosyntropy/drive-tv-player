@@ -27,7 +27,7 @@
   function setMessage(text) { message.textContent = text; }
 
   function apiUrl(path) {
-    const base = (config.apiBaseUrl || "").replace(/\\/$/, "");
+    const base = (config.apiBaseUrl || "").replace(/\/$/, "");
     return base + path;
   }
 
