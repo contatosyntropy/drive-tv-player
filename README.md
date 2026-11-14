@@ -13,13 +13,17 @@ Player web simples para navegar e reproduzir vídeos de uma pasta pública do Go
 
 A pasta configurada é a biblioteca informada no projeto.
 
-## Publicar no Cloudflare Pages
+## Publicar no Cloudflare Workers
 
-- Importe este repositório no Cloudflare Pages.
-- Framework preset: **None**.
-- Build command: deixe vazio.
-- Build output directory: `/`.
-- Salve e aguarde o deploy.
+O repositório inclui `wrangler.jsonc` e `worker.js`. O Worker entrega os arquivos estáticos e disponibiliza `/api/subtitle/{fileId}` como proxy para as legendas do Google Drive.
+
+- Conecte o repositório ao Worker **drive-tv-player** em Workers Builds.
+- Branch de produção: `main`.
+- Deploy command: `npx wrangler deploy` (padrão).
+- Não é necessário comando de build para este projeto estático.
+- O arquivo `.assetsignore` impede que o código do Worker e a configuração sejam publicados como arquivos públicos.
+
+O navegador continua reproduzindo os vídeos pelo método direto atual. Apenas as legendas passam pelo Worker.
 
 ## Observações importantes
 
