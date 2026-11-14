@@ -390,7 +390,7 @@
     const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
       "?key=" + encodeURIComponent(config.apiKey);
 
-    const isMkv = /\\.mkv$/i.test(file.name || "");
+    const isMkv = /\.mkv$/i.test(file.name || "");
     if (isMkv) {
       setPlaybackMessage("Verificando a entrega do MKV pelo Google Drive…");
       const diagnostic = await diagnoseMediaDelivery(sourceUrl);
@@ -407,7 +407,9 @@
       video.load();
       player.classList.add("hidden");
       document.getElementById("library").classList.remove("hidden");
-      status.textContent = "Reprodução transferida para a TV";
+      status.textContent = isMkv
+        ? "Diagnóstico MKV: " + diagnostic.summary
+        : "Reprodução transferida para a TV";
       console.info("Player nativo da LG iniciado:", nativeResult.response);
       return;
     }
