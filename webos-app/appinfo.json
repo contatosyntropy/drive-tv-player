@@ -6,6 +6,6 @@
   "main": "index.html",
   "title": "Drive TV Player",
   "icon": "icon.png",
-  "largeIcon": "icon.png",
+  "largeIcon": "largeicon.png",
   "appDescription": "Sua biblioteca do Google Drive na TV."
 }
