@@ -10,6 +10,9 @@
   const subtitlePattern = /\.(srt|vtt)$/i;
   let items = [];
   let subtitleFiles = [];
+  let folders = [];
+  let currentFolderId = config.folderId;
+  let visibleVideos = [];
   let subtitleUrl = null;
 
   const formatSize = bytes => {
@@ -43,11 +46,13 @@
       }
       const data = await response.json();
       for (const file of (data.files || [])) {
-        const fullPath = folderPath ? folderPath + " / " + file.name : file.name;
         if (file.mimeType === folderMime) {
-          collected.push(...await listFolder(file.id, fullPath, visited));
+          const folder = { id: file.id, name: file.name, parentId: folderId, folderPath };
+          folders.push(folder);
+          collected.push(...await listFolder(file.id, folderPath ? folderPath + " / " + file.name : file.name, visited));
         } else {
           file.folderPath = folderPath;
+          file.parentFolderId = folderId;
           collected.push(file);
         }
       }
@@ -64,15 +69,17 @@
       return;
     }
     status.textContent = "Carregando…";
-    setMessage("Buscando vídeos e subpastas no Google Drive…");
+    setMessage("Organizando pastas e vídeos do Google Drive…");
     try {
+      folders = [];
       const files = await listFolder(config.folderId, "", new Set());
       items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
-      items.sort((a, b) => ((a.folderPath || "") + a.name).localeCompare((b.folderPath || "") + b.name, "pt-BR"));
+      items.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+      folders.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+      currentFolderId = config.folderId;
       render();
-      status.textContent = items.length + " vídeo(s)";
-      setMessage(items.length ? "" : "Nenhum vídeo encontrado nessa pasta ou em suas subpastas.");
+      status.textContent = items.length + " vídeo(s) • " + folders.length + " pasta(s)";
     } catch (error) {
       console.error(error);
       status.textContent = "Falha ao carregar";
@@ -80,15 +87,62 @@
     }
   }
 
+  function renderBreadcrumbs() {
+    const nav = document.getElementById("breadcrumbs");
+    if (!nav) return;
+    nav.innerHTML = "";
+    const chain = [];
+    let cursor = currentFolderId;
+    while (cursor && cursor !== config.folderId) {
+      const folder = folders.find(item => item.id === cursor);
+      if (!folder) break;
+      chain.unshift(folder);
+      cursor = folder.parentId;
+    }
+    const root = document.createElement("button");
+    root.className = "breadcrumb";
+    root.textContent = "Início";
+    root.addEventListener("click", () => { currentFolderId = config.folderId; render(); });
+    nav.appendChild(root);
+    chain.forEach(folder => {
+      const separator = document.createElement("span");
+      separator.className = "breadcrumb-separator";
+      separator.textContent = "›";
+      nav.appendChild(separator);
+      const button = document.createElement("button");
+      button.className = "breadcrumb";
+      button.textContent = folder.name;
+      button.addEventListener("click", () => { currentFolderId = folder.id; render(); });
+      nav.appendChild(button);
+    });
+  }
+
   function render() {
     grid.innerHTML = "";
-    items.forEach((file, index) => {
+    renderBreadcrumbs();
+    const currentFolders = folders.filter(folder => folder.parentId === currentFolderId);
+    visibleVideos = items.filter(file => file.parentFolderId === currentFolderId);
+    if (!currentFolders.length && !visibleVideos.length) {
+      setMessage("Esta pasta está vazia.");
+      return;
+    }
+    setMessage("");
+    currentFolders.forEach(folder => {
+      const card = document.createElement("button");
+      card.className = "video-card folder-card";
+      card.type = "button";
+      card.innerHTML = '<span class="thumb folder-thumb"><span class="folder-symbol">📁</span></span><span class="video-title"></span><span class="video-meta">Abrir pasta</span>';
+      card.querySelector(".video-title").textContent = folder.name;
+      card.addEventListener("click", () => { currentFolderId = folder.id; render(); });
+      grid.appendChild(card);
+    });
+    visibleVideos.forEach((file, index) => {
       const card = document.createElement("button");
       card.className = "video-card";
       card.type = "button";
       card.innerHTML = '<span class="thumb"><span class="play">▶</span></span><span class="video-title"></span><span class="video-meta"></span>';
       card.querySelector(".video-title").textContent = file.name;
-      card.querySelector(".video-meta").textContent = [file.folderPath, formatSize(file.size) || "Vídeo"].filter(Boolean).join(" • ");
+      card.querySelector(".video-meta").textContent = formatSize(file.size) || "Vídeo";
       const thumb = card.querySelector(".thumb");
       if (file.thumbnailLink) {
         const img = document.createElement("img");
@@ -180,7 +234,7 @@
   }
 
   function play(index) {
-    const file = items[index];
+    const file = visibleVideos[index];
     if (!file) return;
     nowPlaying.textContent = file.name;
     player.classList.remove("hidden");
@@ -244,7 +298,7 @@
 
   video.addEventListener("ended", () => {
     const next = Number(video.dataset.index) + 1;
-    if (next < items.length) play(next);
+    if (next < visibleVideos.length) play(next);
   });
   document.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
