@@ -1,4 +1,12 @@
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+  "Access-Control-Allow-Headers": "Range, If-Range, Content-Type",
+  "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range, Content-Type, ETag, Last-Modified"
+};
+
 const JSON_HEADERS = {
+  ...CORS_HEADERS,
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff"
@@ -162,7 +170,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
       return jsonError(data.error?.message || "O Google Drive retornou uma resposta inesperada.", 502);
     }
 
-    const responseHeaders = new Headers();
+    const responseHeaders = new Headers(CORS_HEADERS);
     for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"]) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
@@ -207,9 +215,10 @@ export default {
         return jsonError("Método não permitido.", 405);
       }
 
-      const origin = request.headers.get("Origin");
-      if (origin && origin !== url.origin) {
-        return jsonError("Origem não autorizada.", 403);
+      // O app webOS instalado pode executar em origem local (file://).
+      // O proxy entrega apenas arquivos já compartilhados no Google Drive.
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: CORS_HEADERS });
       }
 
       const videoMatch = url.pathname.match(/^\/api\/video\/([A-Za-z0-9_-]+)(?:\/([^/]+))?$/);
