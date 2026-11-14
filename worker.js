@@ -97,7 +97,7 @@ async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
     const value = request.headers.get(name);
     if (value) rangeHeaders.set(name, value);
   }
-  if (request.method === "HEAD") rangeHeaders.set("Range", "bytes=0-0");
+  // Media players precisam de bytes idênticos aos do arquivo original.\n  // Evita compressão automática do upstream, que pode invalidar offsets HTTP Range.\n  rangeHeaders.set("Accept-Encoding", "identity");\n  if (request.method === "HEAD") rangeHeaders.set("Range", "bytes=0-0");
 
   // Legendas continuam usando a API oficial. Vídeos usam o endpoint de
   // download do Drive, que permite tratar a confirmação de arquivos grandes.
@@ -171,7 +171,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
     }
 
     const responseHeaders = new Headers(CORS_HEADERS);
-    for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"]) {
+    for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Content-Encoding", "ETag", "Last-Modified"]) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
@@ -185,7 +185,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
       if (mimeTypes[extension]) responseHeaders.set("Content-Type", mimeTypes[extension]);
       responseHeaders.set("Content-Disposition", "inline");
     }
-    responseHeaders.set("Cache-Control", "no-store");
+    responseHeaders.set("Cache-Control", "no-store, no-transform");
     responseHeaders.set("X-Content-Type-Options", "nosniff");
 
     if (request.method === "HEAD") {
