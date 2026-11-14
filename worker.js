@@ -27,6 +27,9 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  // The native TV player may probe media URLs with HEAD before opening them.
+  // Fetch only the first byte upstream, then return the full resource metadata.
+  if (request.method === "HEAD") headers.set("Range", "bytes=0-0");
 
   try {
     const upstream = await fetch(driveUrl.toString(), {
@@ -77,6 +80,15 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
     }
     responseHeaders.set("Cache-Control", "no-store");
     responseHeaders.set("X-Content-Type-Options", "nosniff");
+
+    if (request.method === "HEAD") {
+      const contentRange = upstream.headers.get("Content-Range") || "";
+      const totalSize = contentRange.match(/\\/(\\d+)$/);
+      if (totalSize) responseHeaders.set("Content-Length", totalSize[1]);
+      responseHeaders.delete("Content-Range");
+      if (upstream.body) await upstream.body.cancel();
+      return new Response(null, { status: 200, headers: responseHeaders });
+    }
 
     return new Response(upstream.body, {
       status: upstream.status,
