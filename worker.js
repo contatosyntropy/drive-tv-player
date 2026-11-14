@@ -66,7 +66,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
       if (value) responseHeaders.set(name, value);
     }
     if (mode === "video") {
-      const extension = (fileName.match(/\\.([^.]+)$/) || [])[1]?.toLowerCase();
+      const extension = (fileName.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
       const mimeTypes = {
         mkv: "video/x-matroska", mp4: "video/mp4", m4v: "video/mp4",
         webm: "video/webm", mov: "video/quicktime", avi: "video/x-msvideo",
@@ -102,7 +102,7 @@ export default {
         return jsonError("Origem não autorizada.", 403);
       }
 
-      const videoMatch = url.pathname.match(/^\/api\/video\/([A-Za-z0-9_-]+)$/);
+      const videoMatch = url.pathname.match(/^\/api\/video\/([A-Za-z0-9_-]+)(?:\/([^/]+))?$/);
       const subtitleMatch = url.pathname.match(/^\/api\/subtitle\/([A-Za-z0-9_-]+)$/);
       const match = videoMatch || subtitleMatch;
       if (!match) {
