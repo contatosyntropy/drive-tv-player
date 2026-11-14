@@ -395,7 +395,16 @@
     if (isMkv) {
       setPlaybackMessage("Verificando a entrega do MKV pelo Google Drive…");
       diagnostic = await diagnoseMediaDelivery(sourceUrl);
-      setPlaybackMessage("Diagnóstico do MKV: " + diagnostic.summary + ". Abrindo o player da LG…");
+      const diagnosticText = [
+        "DIAGNÓSTICO DO MKV DO DRIVE",
+        "Arquivo: " + file.name,
+        "Tamanho informado pelo Drive: " + (file.size || "desconhecido") + " bytes",
+        diagnostic.summary,
+        "Anote ou fotografe esta mensagem. Ao confirmar, tentaremos abrir o player da LG."
+      ].join("\n\n");
+      setPlaybackMessage(diagnosticText);
+      // Keep the diagnostic visible before the native app takes the foreground.
+      window.alert(diagnosticText);
     } else {
       setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
     }
