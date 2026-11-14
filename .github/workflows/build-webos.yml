@@ -36,7 +36,8 @@ jobs:
           cp webos-app/appinfo.json build/webos-app/
           cp webos-app/index.html build/webos-app/
           cp app.js styles.css config.js build/webos-app/
-          python3 -m pip install --user Pillow
+          sudo apt-get update
+          sudo apt-get install -y python3-pil
           python3 - <<'PY'
           from PIL import Image, ImageDraw
           image = Image.new("RGB", (80, 80), "#08090d")
