@@ -4,3 +4,6 @@
 .next-episode-button{margin-left:auto;background:#8b5cf6;border-color:#a78bfa;font-size:14px;font-weight:700;white-space:nowrap}.next-episode-button:hover,.next-episode-button:focus{background:#7043d6}@media(max-width:650px){.player-head{gap:8px}.next-episode-button{font-size:12px;padding:9px 10px}.now-playing{font-size:13px}}
 
 .direct-source-tests{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}.source-test-hint{color:var(--muted);font-size:12px}.source-test-button{font-size:12px;padding:8px 10px;white-space:nowrap}@media(max-width:900px){.player-head{flex-wrap:wrap}.direct-source-tests{order:3;width:100%;margin:0}.source-test-button{font-size:11px;padding:7px 9px}}
+
+/* Google Drive preview player */
+.drive-preview{display:block;width:100%;height:calc(100vh - 130px);flex:1;min-height:0;border:0;background:#000;margin:12px 0}.player{padding:12px 2vw}.player-head{flex-shrink:0}.player-foot{flex-shrink:0}@media(max-width:650px){.drive-preview{height:calc(100vh - 110px);margin:6px 0}.player{padding:8px}}
