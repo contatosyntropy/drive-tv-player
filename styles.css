@@ -10,3 +10,6 @@
 
 /* Kept hidden for shared playback and subtitle lifecycle code */
 .legacy-video{display:none!important}
+
+/* The legacy HTML5 video must remain hidden while Drive Preview is active. */
+.player video.legacy-video{display:none!important}
