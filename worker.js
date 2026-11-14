@@ -30,13 +30,13 @@ function getHtmlAttribute(tag, attribute) {
 }
 
 function parseDownloadForm(html, fileId, baseUrl) {
-  const formMatch = html.match(/<form\\b[^>]*>([\\s\\S]*?)<\\/form>/i);
+  const formMatch = html.match(/<form\b[^>]*>([\s\S]*?)<\/form>/i);
   if (formMatch) {
     const formTag = formMatch[0].slice(0, formMatch[0].indexOf(">") + 1);
     const action = getHtmlAttribute(formTag, "action") || baseUrl;
     const target = new URL(action, baseUrl);
     const params = new URLSearchParams(target.search);
-    const inputPattern = /<input\\b[^>]*>/gi;
+    const inputPattern = /<input\b[^>]*>/gi;
     let input;
     while ((input = inputPattern.exec(formMatch[1]))) {
       const name = getHtmlAttribute(input[0], "name");
@@ -50,17 +50,17 @@ function parseDownloadForm(html, fileId, baseUrl) {
   }
 
   // Algumas versões do Drive apresentam o link de confirmação em vez de um form.
-  const hrefPattern = /<a\\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
+  const hrefPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
   let anchor;
   while ((anchor = hrefPattern.exec(html))) {
     const href = decodeHtml(anchor[1]);
-    if (/confirm=|drive\\.usercontent\\.google\\.com\\/download/i.test(href)) {
+    if (/confirm=|drive\.usercontent\.google\.com\/download/i.test(href)) {
       return new URL(href, baseUrl).toString();
     }
   }
 
   const confirm = html.match(/[?&]confirm=([\\w-]+)/i)?.[1] ||
-    html.match(/name=["']confirm["']\\s+value=["']([^"']+)["']/i)?.[1];
+    html.match(/name=["']confirm["']\s+value=["']([^"']+)["']/i)?.[1];
   if (confirm) {
     const target = new URL("https://drive.usercontent.google.com/download");
     target.searchParams.set("id", fileId);
