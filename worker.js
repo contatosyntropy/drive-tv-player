@@ -203,7 +203,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      if (request.method !== "GET" && request.method !== "HEAD") {
+      if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
         return jsonError("Método não permitido.", 405);
       }
 
