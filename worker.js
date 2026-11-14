@@ -13,7 +13,7 @@ function jsonError(message, status = 502, details = {}) {
 
 function getCookieHeader(response) {
   const raw = response.headers.get("Set-Cookie") || "";
-  const match = raw.match(/(download_warning[^=;,]*=[^;,\\s]+)/i);
+  const match = raw.match(/(download_warning[^=;,]*=[^;,\s]+)/i);
   return match ? match[1] : "";
 }
 
@@ -23,33 +23,58 @@ function decodeHtml(value) {
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
-function parseDownloadForm(html, fileId) {
-  const formMatch = html.match(/<form\b[^>]*action=["']([^"']+)["'][^>]*>([\s\S]*?)<\/form>/i);
+function getHtmlAttribute(tag, attribute) {
+  const escaped = attribute.replace(/[.*+?^{}()|[\]\\]/g, "\\$&");
+  const match = tag.match(new RegExp("(?:^|\\s)" + escaped + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))", "i"));
+  return match ? decodeHtml(match[1] ?? match[2] ?? match[3] ?? "") : "";
+}
+
+function parseDownloadForm(html, fileId, baseUrl) {
+  const formMatch = html.match(/<form\\b[^>]*>([\\s\\S]*?)<\\/form>/i);
   if (formMatch) {
-    const action = decodeHtml(formMatch[1]);
-    const params = new URLSearchParams();
-    const inputPattern = /<input\b[^>]*>/gi;
+    const formTag = formMatch[0].slice(0, formMatch[0].indexOf(">") + 1);
+    const action = getHtmlAttribute(formTag, "action") || baseUrl;
+    const target = new URL(action, baseUrl);
+    const params = new URLSearchParams(target.search);
+    const inputPattern = /<input\\b[^>]*>/gi;
     let input;
-    while ((input = inputPattern.exec(formMatch[2]))) {
-      const tag = input[0];
-      const name = tag.match(/\bname=["']([^"']+)["']/i)?.[1];
-      const value = tag.match(/\bvalue=["']([^"']*)["']/i)?.[1] ?? "";
-      if (name) params.set(name, decodeHtml(value));
+    while ((input = inputPattern.exec(formMatch[1]))) {
+      const name = getHtmlAttribute(input[0], "name");
+      const value = getHtmlAttribute(input[0], "value");
+      if (name) params.set(name, value);
     }
     if (!params.has("id")) params.set("id", fileId);
     if (!params.has("export")) params.set("export", "download");
-    const target = new URL(action);
-    for (const [key, value] of params) target.searchParams.set(key, value);
+    target.search = params.toString();
     return target.toString();
   }
 
-  const confirm = html.match(/[?&]confirm=([\w-]+)/i)?.[1] ||
-    html.match(/name=["']confirm["']\s+value=["']([^"']+)["']/i)?.[1];
+  // Algumas versões do Drive apresentam o link de confirmação em vez de um form.
+  const hrefPattern = /<a\\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
+  let anchor;
+  while ((anchor = hrefPattern.exec(html))) {
+    const href = decodeHtml(anchor[1]);
+    if (/confirm=|drive\\.usercontent\\.google\\.com\\/download/i.test(href)) {
+      return new URL(href, baseUrl).toString();
+    }
+  }
+
+  const confirm = html.match(/[?&]confirm=([\\w-]+)/i)?.[1] ||
+    html.match(/name=["']confirm["']\\s+value=["']([^"']+)["']/i)?.[1];
   if (confirm) {
     const target = new URL("https://drive.usercontent.google.com/download");
     target.searchParams.set("id", fileId);
     target.searchParams.set("export", "download");
     target.searchParams.set("confirm", confirm);
+    return target.toString();
+  }
+
+  // O Drive usa o token "t" em algumas páginas de confirmação simplificadas.
+  if (/download|virus|large file|arquivo muito grande/i.test(html)) {
+    const target = new URL("https://drive.usercontent.google.com/download");
+    target.searchParams.set("id", fileId);
+    target.searchParams.set("export", "download");
+    target.searchParams.set("confirm", "t");
     return target.toString();
   }
   return null;
@@ -85,7 +110,7 @@ async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
   if (!initialType.toLowerCase().includes("text/html")) return initial;
 
   const html = await initial.text();
-  const confirmedUrl = parseDownloadForm(html, fileId);
+  const confirmedUrl = parseDownloadForm(html, fileId, initial.url || downloadUrl.toString());
   if (!confirmedUrl) {
     return jsonError(
       "O Google Drive apresentou uma página intermediária, mas não foi possível identificar a confirmação de download. Verifique se o arquivo está compartilhado para qualquer pessoa com o link.",
