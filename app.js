@@ -75,7 +75,18 @@
       const files = await listFolder(config.folderId, "", new Set());
       items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
-      items.sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" }));
+      const episodeCode = name => {
+        const match = name.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
+        return match ? { season: Number(match[1]), episode: Number(match[2]) } : null;
+      };
+      items.sort((a, b) => {
+        const ea = episodeCode(a.name), eb = episodeCode(b.name);
+        if (ea && eb) return ea.season - eb.season || ea.episode - eb.episode ||
+          a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" });
+        if (ea) return -1;
+        if (eb) return 1;
+        return a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" });
+      });
       folders.sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" }));
       currentFolderId = config.folderId;
       render();
