@@ -391,9 +391,10 @@
       "?key=" + encodeURIComponent(config.apiKey);
 
     const isMkv = /\.mkv$/i.test(file.name || "");
+    let diagnostic = null;
     if (isMkv) {
       setPlaybackMessage("Verificando a entrega do MKV pelo Google Drive…");
-      const diagnostic = await diagnoseMediaDelivery(sourceUrl);
+      diagnostic = await diagnoseMediaDelivery(sourceUrl);
       setPlaybackMessage("Diagnóstico do MKV: " + diagnostic.summary + ". Abrindo o player da LG…");
     } else {
       setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
