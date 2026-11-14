@@ -3,5 +3,5 @@
 // A chave usada no navegador fica visível ao público: restrinja-a à Drive API e ao domínio do site.
 window.APP_CONFIG = {
   folderId: "14dQVrC1byIovscznOp8baAcsBlMY5klA",
-  apiKey: "COLE_SUA_CHAVE_API_AQUI"
+  apiKey: "AIzaSyD-Z5neBFwWdQbZmWlM7hLhBd0tAh73u-g"
 };
