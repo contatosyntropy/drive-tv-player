@@ -13,3 +13,5 @@
 
 /* The legacy HTML5 video must remain hidden while Drive Preview is active. */
 .player video.legacy-video{display:none!important}
+
+#playback-message{white-space:pre-line;line-height:1.5;max-height:32vh;overflow:auto}
