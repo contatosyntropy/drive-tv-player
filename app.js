@@ -26,6 +26,11 @@
 
   function setMessage(text) { message.textContent = text; }
 
+  function apiUrl(path) {
+    const base = (config.apiBaseUrl || "").replace(/\\/$/, "");
+    return base + path;
+  }
+
   const folderMime = "application/vnd.google-apps.folder";
 
   async function listFolder(folderId, folderPath, visited) {
@@ -216,7 +221,7 @@
     const subtitle = findSubtitle(videoFile);
     if (!subtitle) return;
     try {
-      const url = "/api/subtitle/" + encodeURIComponent(subtitle.id) +
+      const url = apiUrl("/api/subtitle/" + encodeURIComponent(subtitle.id)) +
         "?key=" + encodeURIComponent(config.apiKey);
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) {
@@ -322,7 +327,7 @@
     video.dataset.index = String(index);
     clearSubtitle();
 
-    const sourceUrl = "/api/video/" + encodeURIComponent(file.id) +
+    const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id)) +
       "?key=" + encodeURIComponent(config.apiKey);
 
     setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
