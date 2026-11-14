@@ -52,8 +52,7 @@ jobs:
         run: |
           mkdir -p dist
           ares-config --profile tv
-          ares-package ./build/webos-app
-          find . -maxdepth 2 -type f -name "*.ipk" -exec cp {} dist/ \;
+          ares-package --no-minify --outdir dist ./build/webos-app
           test -n "$(find dist -maxdepth 1 -type f -name '*.ipk' -print -quit)"
 
       - name: Upload webOS package
