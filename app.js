@@ -5,7 +5,6 @@
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
-  const nowPlaying = document.getElementById("now-playing");
   const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
   const subtitlePattern = /\.(srt|vtt)$/i;
 
@@ -486,7 +485,6 @@
     clearSubtitle();
 
     const preview = document.getElementById("drive-preview");
-    nowPlaying.textContent = file.name;
     video.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
@@ -507,7 +505,16 @@
     document.getElementById("library").classList.remove("hidden");
   }
 
-  document.getElementById("back").addEventListener("click", closePlayer);
+  document.addEventListener("keydown", event => {
+    if (player.classList.contains("hidden")) return;
+    // Volta à biblioteca pelo botão Back do controle remoto LG.
+    if (event.key === "Escape" || event.key === "Backspace" ||
+        event.key === "GoBack" || event.keyCode === 461) {
+      event.preventDefault();
+      closePlayer();
+    }
+  });
+
   document.getElementById("refresh").addEventListener("click", loadLibrary);
   function setPlaybackMessage(text) {
     let notice = document.getElementById("playback-message");
