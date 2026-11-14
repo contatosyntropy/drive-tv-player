@@ -257,9 +257,9 @@
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
     video.dataset.index = String(index);
-    video.dataset.fallbackUsed = "false";
     clearSubtitle();
-    const sourceUrl = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
+    const sourceUrl = "/api/video/" + encodeURIComponent(file.id) +
+      "?key=" + encodeURIComponent(config.apiKey);
     video.src = sourceUrl;
     video.load();
     loadSubtitle(file);
@@ -302,21 +302,12 @@
   video.addEventListener("error", () => {
     const file = visibleVideos[Number(video.dataset.index)];
     if (!file) return;
-    if (video.dataset.fallbackUsed !== "true") {
-      video.dataset.fallbackUsed = "true";
-      const fallbackUrl = "https://www.googleapis.com/drive/v3/files/" +
-        encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
-      video.src = fallbackUrl;
-      video.load();
-      video.play().catch(() => {});
-      return;
-    }
     const code = video.error?.code;
     const detail = code === 4
-      ? "O navegador não conseguiu reproduzir este arquivo ou o Google Drive não entregou o conteúdo em um formato compatível. Verifique se o arquivo está compartilhado como “Qualquer pessoa com o link”."
-      : "O Google Drive não entregou o vídeo ao navegador. Verifique o compartilhamento e tente novamente.";
+      ? "O navegador não conseguiu reproduzir o conteúdo recebido pelo proxy do Google Drive. Isso pode indicar incompatibilidade do formato/codec ou uma resposta de mídia inválida."
+      : "Não foi possível receber o vídeo do Google Drive pelo proxy. Verifique o compartilhamento e tente novamente.";
     setPlaybackMessage(detail);
-    console.error("Falha ao reproduzir vídeo:", file.name, video.error);
+    console.error("Falha ao reproduzir vídeo pelo proxy:", file.name, video.error);
   });
 
   video.addEventListener("ended", () => {
