@@ -302,94 +302,99 @@
     };
   }
 
-  async function diagnoseMediaDelivery(sourceUrl) {
-    const result = { head: null, signature: null, largerRange: null, offsetRange: null };
+  async function diagnoseMediaDelivery(sourceUrl, file) {
+    const result = { head: null, ranges: [] };
     const readHeaders = response => ({
       status: response.status,
       contentType: response.headers.get("Content-Type"),
       contentLength: response.headers.get("Content-Length"),
       contentRange: response.headers.get("Content-Range"),
       acceptRanges: response.headers.get("Accept-Ranges"),
+      contentEncoding: response.headers.get("Content-Encoding"),
       disposition: response.headers.get("Content-Disposition")
     });
-    const readRange = async (label, range) => {
-      const response = await fetch(sourceUrl, {
+    // Nunca carregar o arquivo inteiro na memória: lê apenas 16 bytes e cancela.
+    const readRange = async (label, range, url = sourceUrl) => {
+      const response = await fetch(url, {
         method: "GET",
-        headers: { Range: range },
+        headers: { Range: range, "Accept-Encoding": "identity" },
         cache: "no-store"
       });
       const headers = readHeaders(response);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      return { label, range, ...headers, receivedBytes: bytes.byteLength, bytes };
+      let sample = new Uint8Array(0);
+      if (response.body) {
+        const reader = response.body.getReader();
+        try {
+          const part = await reader.read();
+          if (!part.done) sample = part.value.slice(0, 16);
+        } finally {
+          await reader.cancel().catch(() => {});
+        }
+      }
+      return {
+        label, range, ...headers,
+        sampleHex: Array.from(sample).map(value => value.toString(16).padStart(2, "0").toUpperCase()).join(" ")
+      };
     };
-    const hex = bytes => Array.from(bytes).map(value => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
 
     try {
       const head = await fetch(sourceUrl, { method: "HEAD", cache: "no-store" });
       result.head = readHeaders(head);
+      const size = Number(result.head.contentLength || file?.size || 0);
+      const ranges = [
+        ["início", "bytes=0-4095"],
+        ["1 MiB", "bytes=1048576-1052671"]
+      ];
+      if (Number.isSafeInteger(size) && size > 8192) {
+        const middle = Math.floor(size / 2);
+        const late = Math.floor(size * 0.9);
+        ranges.push(
+          ["meio", "bytes=" + middle + "-" + (middle + 4095)],
+          ["90%", "bytes=" + late + "-" + (late + 4095)],
+          ["final", "bytes=" + Math.max(0, size - 4096) + "-" + (size - 1)]
+        );
+      }
+      for (const [label, range] of ranges) {
+        try { result.ranges.push(await readRange(label, range)); }
+        catch (error) { result.ranges.push({ label, range, error: error.message }); }
+      }
     } catch (error) {
       result.head = { error: error.message };
     }
 
+    // Referência externa que já foi reproduzida no player nativo da TV.
     try {
-      const first = await readRange("início", "bytes=0-4095");
-      const signature = first.bytes.slice(0, 4);
-      const isMkv = signature.length === 4 &&
-        signature[0] === 0x1A && signature[1] === 0x45 &&
-        signature[2] === 0xDF && signature[3] === 0xA3;
-      result.signature = {
-        status: first.status,
-        contentType: first.contentType,
-        contentRange: first.contentRange,
-        receivedBytes: first.receivedBytes,
-        firstFourBytes: hex(signature),
-        isMkv
-      };
-      result.largerRange = {
-        status: first.status,
-        contentRange: first.contentRange,
-        receivedBytes: first.receivedBytes
-      };
+      result.externalReference = await readRange(
+        "MKV externo conhecido",
+        "bytes=900000-900255",
+        "https://pnb-website-bucket.s3.us-east-2.amazonaws.com/samples/videos/mkv/sample-video-480x270-1mb.mkv"
+      );
     } catch (error) {
-      result.signature = { error: error.message };
-      result.largerRange = { error: error.message };
+      result.externalReference = { error: error.message };
     }
 
-    try {
-      const offset = await readRange("offset", "bytes=1048576-1052671");
-      result.offsetRange = {
-        status: offset.status,
-        contentRange: offset.contentRange,
-        receivedBytes: offset.receivedBytes
-      };
-    } catch (error) {
-      result.offsetRange = { error: error.message };
-    }
-
-    console.group("Diagnóstico de entrega do Google Drive");
-    console.log("URL:", sourceUrl.replace(/([?&]key=)[^&]+/i, "$1[OCULTA]"));
-    console.log("HEAD:", result.head);
-    console.log("Assinatura MKV e faixa inicial bytes=0-4095:", result.signature);
-    console.log("Faixa em offset bytes=1048576-1052671:", result.offsetRange);
+    console.group("Diagnóstico de entrega de mídia");
+    console.log("Arquivo:", file?.name || "atual");
+    console.log("HEAD Worker:", result.head);
+    console.table(result.ranges);
+    console.log("Referência MKV externa:", result.externalReference);
     console.groupEnd();
-
-    const headText = result.head.error
-      ? "HEAD falhou: " + result.head.error
-      : "HEAD " + result.head.status + " • " + (result.head.contentType || "sem MIME") +
-        " • tamanho " + (result.head.contentLength || "?");
-    const signatureText = result.signature.error
-      ? "Assinatura falhou: " + result.signature.error
-      : "início " + result.signature.firstFourBytes +
-        (result.signature.isMkv ? " (MKV válido)" : " (não corresponde à assinatura MKV)") +
-        " • faixa " + result.signature.status + " / " + result.signature.receivedBytes + " bytes";
-    const offsetText = result.offsetRange.error
-      ? "offset falhou: " + result.offsetRange.error
-      : "offset " + result.offsetRange.status + " • " +
-        (result.offsetRange.contentRange || "?") +
-        " • recebido " + result.offsetRange.receivedBytes + " byte(s)";
-    return { details: result, summary: headText + " • " + signatureText + " • " + offsetText };
+    const head = result.head || {};
+    const lines = [
+      "Diagnóstico HTTP — " + (file?.name || "arquivo"),
+      "HEAD: " + (head.status || "falhou") + " • " + (head.contentType || "sem MIME") +
+        " • tamanho " + (head.contentLength || "?") + " • Accept-Ranges " + (head.acceptRanges || "?"),
+      ...result.ranges.map(item =>
+        item.label + ": " + (item.status || "falhou") + " • " +
+        (item.contentRange || "sem Content-Range") + " • " +
+        (item.contentLength || "?") + " bytes declarados" +
+        (item.error ? " • " + item.error : "")
+      ),
+      "MKV externo: " + (result.externalReference.status || "falhou") + " • " +
+        (result.externalReference.contentRange || "sem Content-Range")
+    ];
+    return { details: result, summary: lines.join("\n") };
   }
-
   function launchNativePlayer(file, sourceUrl) {
     const payload = nativePlayerPayload(file, sourceUrl);
     const params = { payload: [payload] };
@@ -516,12 +521,10 @@
       try {
         const result = await launchNativePlayer(file, videoSourceUrl(file));
         if (result.ok) {
-          const preview = document.getElementById("drive-preview");
-          if (preview) preview.src = "about:blank";
-          video.pause();
-          player.classList.add("hidden");
-          document.getElementById("library").classList.remove("hidden");
-          status.textContent = "Solicitação enviada ao player nativo. Verifique a reprodução na TV.";
+          // A resposta do serviço confirma apenas o lançamento do Media Discovery,
+          // não o início da reprodução. Preserve o Preview como fallback.
+          status.textContent = "Media Player aberto. Se o vídeo não iniciar, volte e use o Preview.";
+          setPlaybackMessage("A TV aceitou abrir o Media Player. O Preview foi mantido como alternativa.");
           console.info("Solicitação ao player nativo:", result.response);
         } else {
           const reason = result.error?.errorText || result.error?.message || "erro não identificado";
@@ -533,6 +536,25 @@
         console.error(error);
       } finally {
         nativeCurrentButton.disabled = false;
+      }
+    });
+  }
+
+  const diagnoseCurrentButton = document.getElementById("diagnose-current");
+  if (diagnoseCurrentButton) {
+    diagnoseCurrentButton.addEventListener("click", async () => {
+      const file = visibleVideos[Number(video.dataset.index)];
+      if (!file) return;
+      diagnoseCurrentButton.disabled = true;
+      setPlaybackMessage("Verificando HTTP Range no início, meio e final do arquivo. Isso não baixa o vídeo inteiro…");
+      try {
+        const report = await diagnoseMediaDelivery(videoSourceUrl(file), file);
+        setPlaybackMessage(report.summary);
+        status.textContent = "Diagnóstico concluído — confira os intervalos HTTP.";
+      } catch (error) {
+        setPlaybackMessage("Falha no diagnóstico: " + error.message);
+      } finally {
+        diagnoseCurrentButton.disabled = false;
       }
     });
   }
