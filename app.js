@@ -456,71 +456,28 @@
     setPlaybackMessage("Este teste abre o player nativo da TV. No computador, use os botões de abrir origem ou diagnosticar Worker; o navegador pode não reproduzir MKV.");
   }
 
-  async function play(index) {
+  function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
     nowPlaying.textContent = file.name;
     document.getElementById("next-episode").classList.add("hidden");
     video.dataset.index = String(index);
+    video.dataset.fallbackUsed = "false";
     clearSubtitle();
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
 
-    let controls = document.getElementById("direct-source-tests");
-    if (!controls) {
-      controls = document.createElement("div");
-      controls.id = "direct-source-tests";
-      controls.className = "direct-source-tests";
-      player.querySelector(".player-head").insertBefore(
-        controls, document.getElementById("next-episode"));
-    }
-    controls.innerHTML = "";
-    const hint = document.createElement("span");
-    hint.className = "source-test-hint";
-    hint.textContent = "Testar origem:";
-    controls.appendChild(hint);
-
-    for (const source of directDriveUrls(file)) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "icon-button source-test-button";
-      button.textContent = source.label;
-      button.addEventListener("click", () => openDirectSource(source));
-      controls.appendChild(button);
-    }
-
-    const workerUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
-      "?key=" + encodeURIComponent(config.apiKey);
-
-    const diagnoseButton = document.createElement("button");
-    diagnoseButton.type = "button";
-    diagnoseButton.className = "icon-button source-test-button";
-    diagnoseButton.textContent = "Diagnosticar Worker";
-    diagnoseButton.addEventListener("click", async () => {
-      diagnoseButton.disabled = true;
-      diagnoseButton.textContent = "Analisando…";
-      setPlaybackMessage("Verificando assinatura MKV, faixa inicial de 4 KB e uma faixa em outro ponto do arquivo. Veja também o console (F12).");
-      try {
-        const diagnostic = await diagnoseMediaDelivery(workerUrl);
-        setPlaybackMessage("Diagnóstico do Worker: " + diagnostic.summary + ". Detalhes completos no console (F12).");
-      } catch (error) {
-        setPlaybackMessage("Não foi possível concluir o diagnóstico: " + error.message);
-      } finally {
-        diagnoseButton.disabled = false;
-        diagnoseButton.textContent = "Diagnosticar Worker";
-      }
-    });
-    controls.appendChild(diagnoseButton);
-
-    const workerButton = document.createElement("button");
-    workerButton.type = "button";
-    workerButton.className = "icon-button source-test-button";
-    workerButton.textContent = "Reproduzir Worker";
-    workerButton.addEventListener("click", () => tryDirectSource(file, { label: "Worker", url: workerUrl }));
-    controls.appendChild(workerButton);
-    video.removeAttribute("src");
+    // Restaura a estratégia original que funcionava: o elemento de vídeo
+    // recebe diretamente o link de download do Google Drive.
+    const sourceUrl = "https://drive.google.com/uc?export=download&id=" +
+      encodeURIComponent(file.id);
+    video.src = sourceUrl;
     video.load();
-    setPlaybackMessage("No computador, os botões testam no navegador. Na TV, cada opção é enviada ao player nativo.");
+    loadSubtitle(file);
+    video.play().catch(error => {
+      console.warn("Reprodução não iniciada automaticamente:", error);
+      setPlaybackMessage("Toque em ▶ no controle do vídeo para iniciar a reprodução.");
+    });
   }
 
   function closePlayer() {
@@ -556,12 +513,25 @@
   video.addEventListener("error", () => {
     const file = visibleVideos[Number(video.dataset.index)];
     if (!file) return;
+
+    // Fallback histórico: se o link direto falhar, tenta a mídia pela Drive API.
+    if (video.dataset.fallbackUsed !== "true") {
+      video.dataset.fallbackUsed = "true";
+      const fallbackUrl = "https://www.googleapis.com/drive/v3/files/" +
+        encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+      console.warn("Link direto do Drive falhou; tentando fallback da Drive API.");
+      video.src = fallbackUrl;
+      video.load();
+      video.play().catch(() => {});
+      return;
+    }
+
     const code = video.error?.code;
     const detail = code === 4
-      ? "O navegador não conseguiu reproduzir o conteúdo recebido pelo proxy do Google Drive. Isso pode indicar incompatibilidade do formato/codec ou uma resposta de mídia inválida."
-      : "Não foi possível receber o vídeo do Google Drive pelo proxy. Verifique o compartilhamento e tente novamente.";
+      ? "O navegador/player não reconheceu o formato ou a resposta enviada pelo Google Drive."
+      : "Não foi possível receber o vídeo do Google Drive. Verifique o compartilhamento e tente novamente.";
     setPlaybackMessage(detail);
-    console.error("Falha ao reproduzir vídeo pelo proxy:", file.name, video.error);
+    console.error("Falha nas duas fontes de reprodução:", file.name, video.error);
   });
 
   video.addEventListener("ended", () => {
