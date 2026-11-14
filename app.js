@@ -328,12 +328,15 @@
     console.groupEnd();
 
     const headText = result.head.error
-      ? "HEAD falhou"
-      : "HEAD " + result.head.status + " / " + (result.head.contentType || "sem MIME");
+      ? "HEAD falhou: " + result.head.error
+      : "HEAD " + result.head.status + " • " + (result.head.contentType || "sem MIME") +
+        " • tamanho " + (result.head.contentLength || "?") +
+        " • Accept-Ranges " + (result.head.acceptRanges || "?");
     const rangeText = result.range.error
-      ? "Range falhou"
-      : "Range " + result.range.status + " / " +
-        (result.range.contentRange || (result.range.receivedBytes + " bytes"));
+      ? "Range falhou: " + result.range.error
+      : "Range " + result.range.status + " • " +
+        (result.range.contentRange || (result.range.receivedBytes + " bytes")) +
+        " • recebido " + result.range.receivedBytes + " byte(s)";
     return { details: result, summary: headText + " • " + rangeText };
   }
 
