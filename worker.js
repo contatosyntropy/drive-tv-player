@@ -84,7 +84,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
     if (request.method === "HEAD") {
       const contentRange = upstream.headers.get("Content-Range") || "";
       const totalSize = contentRange.split("/").pop();
-      if (/^\\d+$/.test(totalSize)) responseHeaders.set("Content-Length", totalSize);
+      if (totalSize && Number.isFinite(Number(totalSize))) responseHeaders.set("Content-Length", totalSize);
       responseHeaders.delete("Content-Range");
       if (upstream.body) await upstream.body.cancel();
       return new Response(null, { status: 200, headers: responseHeaders });
