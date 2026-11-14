@@ -290,6 +290,53 @@
     };
   }
 
+  async function diagnoseMediaDelivery(sourceUrl) {
+    const result = { head: null, range: null };
+    const readHeaders = response => ({
+      status: response.status,
+      contentType: response.headers.get("Content-Type"),
+      contentLength: response.headers.get("Content-Length"),
+      contentRange: response.headers.get("Content-Range"),
+      acceptRanges: response.headers.get("Accept-Ranges"),
+      disposition: response.headers.get("Content-Disposition")
+    });
+
+    try {
+      const head = await fetch(sourceUrl, { method: "HEAD", cache: "no-store" });
+      result.head = readHeaders(head);
+    } catch (error) {
+      result.head = { error: error.message };
+    }
+
+    try {
+      const partial = await fetch(sourceUrl, {
+        method: "GET",
+        headers: { Range: "bytes=0-1" },
+        cache: "no-store"
+      });
+      const headers = readHeaders(partial);
+      const bytes = await partial.arrayBuffer();
+      result.range = Object.assign({}, headers, { receivedBytes: bytes.byteLength });
+    } catch (error) {
+      result.range = { error: error.message };
+    }
+
+    console.group("Diagnóstico de entrega do Google Drive");
+    console.log("URL:", sourceUrl.replace(/([?&]key=)[^&]+/i, "$1[OCULTA]"));
+    console.log("HEAD:", result.head);
+    console.log("Range bytes=0-1:", result.range);
+    console.groupEnd();
+
+    const headText = result.head.error
+      ? "HEAD falhou"
+      : "HEAD " + result.head.status + " / " + (result.head.contentType || "sem MIME");
+    const rangeText = result.range.error
+      ? "Range falhou"
+      : "Range " + result.range.status + " / " +
+        (result.range.contentRange || (result.range.receivedBytes + " bytes"));
+    return { details: result, summary: headText + " • " + rangeText };
+  }
+
   function launchNativePlayer(file, sourceUrl) {
     const payload = nativePlayerPayload(file, sourceUrl);
     const params = { payload: [payload] };
@@ -340,7 +387,14 @@
     const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
       "?key=" + encodeURIComponent(config.apiKey);
 
-    setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
+    const isMkv = /\\.mkv$/i.test(file.name || "");
+    if (isMkv) {
+      setPlaybackMessage("Verificando a entrega do MKV pelo Google Drive…");
+      const diagnostic = await diagnoseMediaDelivery(sourceUrl);
+      setPlaybackMessage("Diagnóstico do MKV: " + diagnostic.summary + ". Abrindo o player da LG…");
+    } else {
+      setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
+    }
     const nativeResult = await launchNativePlayer(file, sourceUrl);
 
     if (nativeResult.ok) {
