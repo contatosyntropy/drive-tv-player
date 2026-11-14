@@ -22,7 +22,7 @@
     const knownTypes = {
       mp4: "video/mp4",
       m4v: "video/mp4",
-      mkv: "video/x-matroska",
+      // MKV: não força MIME. Deixa o navegador identificar o tipo real recebido do Drive.
       webm: "video/webm",
       ogv: "video/ogg",
       ogg: "video/ogg",
