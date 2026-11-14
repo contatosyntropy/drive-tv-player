@@ -7,3 +7,6 @@
 
 /* Google Drive preview player */
 .drive-preview{display:block;width:100%;height:calc(100vh - 130px);flex:1;min-height:0;border:0;background:#000;margin:12px 0}.player{padding:12px 2vw}.player-head{flex-shrink:0}.player-foot{flex-shrink:0}@media(max-width:650px){.drive-preview{height:calc(100vh - 110px);margin:6px 0}.player{padding:8px}}
+
+/* Kept hidden for shared playback and subtitle lifecycle code */
+.legacy-video{display:none!important}
