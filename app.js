@@ -431,5 +431,30 @@
     }
   });
 
+  // Diagnostic: test the LG native player independently from Google Drive.
+  const nativeTestButton = document.createElement("button");
+  nativeTestButton.type = "button";
+  nativeTestButton.className = "icon-button";
+  nativeTestButton.textContent = "Testar player LG";
+  nativeTestButton.addEventListener("click", async () => {
+    status.textContent = "Testando player nativo…";
+    const testFile = {
+      name: "sintel-trailer.mp4",
+      size: -1,
+      mimeType: "video/mp4",
+      thumbnailLink: ""
+    };
+    const result = await launchNativePlayer(testFile, "https://media.w3.org/2010/05/sintel/trailer.mp4");
+    if (result.ok) {
+      status.textContent = "Player LG aberto — verifique se o MP4 reproduz.";
+      console.info("Teste do player nativo:", result.response);
+    } else {
+      status.textContent = "Falha ao abrir player LG: " + (result.error?.errorText || result.error?.message || "erro desconhecido");
+      console.error("Teste do player nativo falhou:", result.error);
+    }
+  });
+  const topActions = document.querySelector(".top-actions");
+  if (topActions) topActions.insertBefore(nativeTestButton, document.getElementById("refresh"));
+
   loadLibrary();
 })();
