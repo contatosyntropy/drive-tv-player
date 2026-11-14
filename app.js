@@ -77,10 +77,16 @@
     nowPlaying.textContent = file.name;
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
-    video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
-    video.load();
-    video.play().catch(() => {});
     video.dataset.index = String(index);
+    video.dataset.fallbackUsed = "false";
+    // Primeiro tenta a entrega de mídia oficial da Drive API.
+    video.src = "https://www.googleapis.com/drive/v3/files/" +
+      encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+    video.load();
+    video.play().catch(error => {
+      console.warn("Reprodução não iniciada automaticamente:", error);
+      setPlaybackMessage("Toque em ▶ no controle do vídeo para iniciar a reprodução.");
+    });
   }
 
   function closePlayer() {
@@ -93,6 +99,37 @@
 
   document.getElementById("back").addEventListener("click", closePlayer);
   document.getElementById("refresh").addEventListener("click", loadLibrary);
+  function setPlaybackMessage(text) {
+    let notice = document.getElementById("playback-message");
+    if (!notice) {
+      notice = document.createElement("p");
+      notice.id = "playback-message";
+      notice.className = "message";
+      video.insertAdjacentElement("afterend", notice);
+    }
+    notice.textContent = text;
+  }
+
+  video.addEventListener("playing", () => setPlaybackMessage(""));
+  video.addEventListener("error", () => {
+    const file = items[Number(video.dataset.index)];
+    if (!file) return;
+    // Alguns arquivos públicos ainda podem funcionar pelo link direto do Drive.
+    if (video.dataset.fallbackUsed !== "true") {
+      video.dataset.fallbackUsed = "true";
+      video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
+      video.load();
+      video.play().catch(() => {});
+      return;
+    }
+    const code = video.error?.code;
+    const detail = code === 4
+      ? "Formato ou endereço não suportado. Converta o vídeo para MP4 (H.264 + AAC) e confirme que está compartilhado como “Qualquer pessoa com o link”."
+      : "O Google Drive não entregou o vídeo ao navegador. Verifique o compartilhamento e tente novamente.";
+    setPlaybackMessage(detail);
+    console.error("Falha ao reproduzir vídeo:", file.name, video.error);
+  });
+
   video.addEventListener("ended", () => {
     const next = Number(video.dataset.index) + 1;
     if (next < items.length) play(next);
