@@ -1,0 +1,63 @@
+name: Build webOS TV package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app.js"
+      - "index.html"
+      - "styles.css"
+      - "config.js"
+      - "webos-app/**"
+      - ".github/workflows/build-webos.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install webOS CLI
+        run: npm install --global @webos-tools/cli
+
+      - name: Assemble packaged app
+        run: |
+          mkdir -p build/webos-app
+          cp webos-app/appinfo.json build/webos-app/
+          cp webos-app/index.html build/webos-app/
+          cp app.js styles.css config.js build/webos-app/
+          python3 -m pip install --user Pillow
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          image = Image.new("RGB", (80, 80), "#08090d")
+          draw = ImageDraw.Draw(image)
+          draw.rounded_rectangle((4, 4, 76, 76), radius=16, fill="#8b5cf6")
+          draw.polygon([(31, 21), (31, 59), (60, 40)], fill="#ffffff")
+          image.save("build/webos-app/icon.png")
+          PY
+
+      - name: Package IPK
+        run: |
+          mkdir -p dist
+          ares-config --profile tv
+          ares-package ./build/webos-app
+          find . -maxdepth 2 -type f -name "*.ipk" -exec cp {} dist/ \;
+          test -n "$(find dist -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+
+      - name: Upload webOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-tv-player-webos-ipk
+          path: dist/*.ipk
+          if-no-files-found: error
+          retention-days: 14
