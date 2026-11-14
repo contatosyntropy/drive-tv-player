@@ -75,8 +75,8 @@
       const files = await listFolder(config.folderId, "", new Set());
       items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
-      items.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-      folders.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+      items.sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" }));
+      folders.sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" }));
       currentFolderId = config.folderId;
       render();
       status.textContent = items.length + " vídeo(s) • " + folders.length + " pasta(s)";
@@ -237,6 +237,7 @@
     const file = visibleVideos[index];
     if (!file) return;
     nowPlaying.textContent = file.name;
+    document.getElementById("next-episode").classList.add("hidden");
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
     video.dataset.index = String(index);
@@ -262,6 +263,10 @@
   }
 
   document.getElementById("back").addEventListener("click", closePlayer);
+  document.getElementById("next-episode").addEventListener("click", () => {
+    const next = Number(video.dataset.index) + 1;
+    if (next < visibleVideos.length) play(next);
+  });
   document.getElementById("refresh").addEventListener("click", loadLibrary);
   function setPlaybackMessage(text) {
     let notice = document.getElementById("playback-message");
@@ -298,7 +303,13 @@
 
   video.addEventListener("ended", () => {
     const next = Number(video.dataset.index) + 1;
-    if (next < visibleVideos.length) play(next);
+    const nextButton = document.getElementById("next-episode");
+    if (next < visibleVideos.length) {
+      nextButton.classList.remove("hidden");
+      nextButton.focus();
+    } else {
+      setPlaybackMessage("Você chegou ao final desta pasta.");
+    }
   });
   document.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
