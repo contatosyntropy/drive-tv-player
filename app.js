@@ -453,8 +453,33 @@
       console.error("Teste do player nativo falhou:", result.error);
     }
   });
+  const mkvTestButton = document.createElement("button");
+  mkvTestButton.type = "button";
+  mkvTestButton.className = "icon-button";
+  mkvTestButton.textContent = "Testar MKV externo";
+  mkvTestButton.addEventListener("click", async () => {
+    status.textContent = "Testando MKV público no player LG…";
+    const testFile = {
+      name: "sample-video-480x270-1mb.mkv",
+      size: 947682,
+      mimeType: "video/x-matroska",
+      thumbnailLink: ""
+    };
+    const testUrl = "https://pnb-website-bucket.s3.us-east-2.amazonaws.com/samples/videos/mkv/sample-video-480x270-1mb.mkv";
+    const result = await launchNativePlayer(testFile, testUrl);
+    if (result.ok) {
+      status.textContent = "Player LG aberto com MKV externo — verifique se reproduz.";
+      console.info("Teste MKV externo:", result.response);
+    } else {
+      status.textContent = "Falha ao abrir player LG com MKV: " + (result.error?.errorText || result.error?.message || "erro desconhecido");
+      console.error("Teste MKV externo falhou:", result.error);
+    }
+  });
   const topActions = document.querySelector(".top-actions");
-  if (topActions) topActions.insertBefore(nativeTestButton, document.getElementById("refresh"));
+  if (topActions) {
+    topActions.insertBefore(mkvTestButton, document.getElementById("refresh"));
+    topActions.insertBefore(nativeTestButton, mkvTestButton);
+  }
 
   loadLibrary();
 })();
