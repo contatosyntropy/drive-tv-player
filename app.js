@@ -32,6 +32,12 @@
     return base + path;
   }
 
+  function videoSourceUrl(file) {
+    const path = "/api/video/" + encodeURIComponent(file.id) + "/" +
+      encodeURIComponent(file.name || "video");
+    return apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
+  }
+
   const folderMime = "application/vnd.google-apps.folder";
 
   async function listFolder(folderId, folderPath, visited) {
@@ -481,10 +487,9 @@
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
 
-    // Restaura a estratégia original que funcionava: o elemento de vídeo
-    // recebe diretamente o link de download do Google Drive.
-    const sourceUrl = "https://drive.google.com/uc?export=download&id=" +
-      encodeURIComponent(file.id);
+    // Toda a mídia passa pelo Worker: ele resolve a confirmação do Drive
+    // para arquivos grandes e mantém o streaming por requisições Range.
+    const sourceUrl = videoSourceUrl(file);
     video.src = sourceUrl;
     video.load();
     video.play().catch(error => {
@@ -535,24 +540,12 @@
     const file = visibleVideos[Number(video.dataset.index)];
     if (!file) return;
 
-    // Fallback histórico: se o link direto falhar, tenta a mídia pela Drive API.
-    if (video.dataset.fallbackUsed !== "true") {
-      video.dataset.fallbackUsed = "true";
-      const fallbackUrl = "https://www.googleapis.com/drive/v3/files/" +
-        encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
-      console.warn("Link direto do Drive falhou; tentando fallback da Drive API.");
-      video.src = fallbackUrl;
-      video.load();
-      video.play().catch(() => {});
-      return;
-    }
-
     const code = video.error?.code;
     const detail = code === 4
-      ? "O navegador/player não reconheceu o formato ou a resposta enviada pelo Google Drive."
-      : "Não foi possível receber o vídeo do Google Drive. Verifique o compartilhamento e tente novamente.";
+      ? "O player não reconheceu o conteúdo entregue pelo intermediário do Google Drive. Confira o compartilhamento e a confirmação de download do arquivo."
+      : "O intermediário não conseguiu entregar o vídeo. Verifique se o arquivo está compartilhado para qualquer pessoa com o link.";
     setPlaybackMessage(detail);
-    console.error("Falha nas duas fontes de reprodução:", file.name, video.error);
+    console.error("Falha na entrega do vídeo pelo Worker:", file.name, video.error);
   });
 
   video.addEventListener("ended", () => {
