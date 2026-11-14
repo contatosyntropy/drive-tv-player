@@ -327,7 +327,7 @@
     video.dataset.index = String(index);
     clearSubtitle();
 
-    const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id)) +
+    const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
       "?key=" + encodeURIComponent(config.apiKey);
 
     setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
