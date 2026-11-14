@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#08090d">
+  <title>Drive TV Player</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app-loading" style="padding:8vw;color:#fff;font:24px Arial">Iniciando Drive TV Player…</div>
+  <script src="./config.js"></script>
+  <script>
+    window.APP_CONFIG = window.APP_CONFIG || {};
+    window.APP_CONFIG.apiBaseUrl = "https://drive-tv-player.contatosyntropy.workers.dev";
+    document.getElementById("app-loading").remove();
+  </script>
+  <script src="./app.js"></script>
+</body>
+</html>
