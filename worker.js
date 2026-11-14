@@ -11,33 +11,114 @@ function jsonError(message, status = 502, details = {}) {
   });
 }
 
-async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "") {
-  const driveUrl = new URL(
-    "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId)
-  );
-  driveUrl.searchParams.set("alt", "media");
-  driveUrl.searchParams.set("key", apiKey);
+function getCookieHeader(response) {
+  const raw = response.headers.get("Set-Cookie") || "";
+  const match = raw.match(/(download_warning[^=;,]*=[^;,s]+)/i);
+  return match ? match[1] : "";
+}
 
-  const headers = new Headers({
-    "Referer": request.headers.get("Referer") || url.origin + "/"
-  });
+function decodeHtml(value) {
+  return value.replace(/&amp;/g, "&").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
 
-  // O player HTML5 usa Range para buscar trechos do vídeo e permitir seek.
+function parseDownloadForm(html, fileId) {
+  const formMatch = html.match(/<form\b[^>]*action=["']([^"']+)["'][^>]*>([\s\S]*?)<\/form>/i);
+  if (formMatch) {
+    const action = decodeHtml(formMatch[1]);
+    const params = new URLSearchParams();
+    const inputPattern = /<input\b[^>]*>/gi;
+    let input;
+    while ((input = inputPattern.exec(formMatch[2]))) {
+      const tag = input[0];
+      const name = tag.match(/\bname=["']([^"']+)["']/i)?.[1];
+      const value = tag.match(/\bvalue=["']([^"']*)["']/i)?.[1] ?? "";
+      if (name) params.set(name, decodeHtml(value));
+    }
+    if (!params.has("id")) params.set("id", fileId);
+    if (!params.has("export")) params.set("export", "download");
+    const target = new URL(action);
+    for (const [key, value] of params) target.searchParams.set(key, value);
+    return target.toString();
+  }
+
+  const confirm = html.match(/[?&]confirm=([\w-]+)/i)?.[1] ||
+    html.match(/name=["']confirm["']\s+value=["']([^"']+)["']/i)?.[1];
+  if (confirm) {
+    const target = new URL("https://drive.usercontent.google.com/download");
+    target.searchParams.set("id", fileId);
+    target.searchParams.set("export", "download");
+    target.searchParams.set("confirm", confirm);
+    return target.toString();
+  }
+  return null;
+}
+
+async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
+  const rangeHeaders = new Headers();
   for (const name of ["Range", "If-Range"]) {
     const value = request.headers.get(name);
-    if (value) headers.set(name, value);
+    if (value) rangeHeaders.set(name, value);
   }
-  // The native TV player may probe media URLs with HEAD before opening them.
-  // Fetch only the first byte upstream, then return the full resource metadata.
-  if (request.method === "HEAD") headers.set("Range", "bytes=0-0");
+  if (request.method === "HEAD") rangeHeaders.set("Range", "bytes=0-0");
 
+  // Legendas continuam usando a API oficial. Vídeos usam o endpoint de
+  // download do Drive, que permite tratar a confirmação de arquivos grandes.
+  if (mode !== "video") {
+    const apiUrl = new URL("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId));
+    apiUrl.searchParams.set("alt", "media");
+    apiUrl.searchParams.set("key", apiKey);
+    return fetch(apiUrl.toString(), { method: "GET", redirect: "follow", headers: rangeHeaders });
+  }
+
+  const downloadUrl = new URL("https://drive.google.com/uc");
+  downloadUrl.searchParams.set("export", "download");
+  downloadUrl.searchParams.set("id", fileId);
+
+  const initial = await fetch(downloadUrl.toString(), {
+    method: "GET",
+    redirect: "follow",
+    headers: rangeHeaders
+  });
+  const initialType = initial.headers.get("Content-Type") || "";
+  if (!initialType.toLowerCase().includes("text/html")) return initial;
+
+  const html = await initial.text();
+  const confirmedUrl = parseDownloadForm(html, fileId);
+  if (!confirmedUrl) {
+    return jsonError(
+      "O Google Drive apresentou uma página intermediária, mas não foi possível identificar a confirmação de download. Verifique se o arquivo está compartilhado para qualquer pessoa com o link.",
+      502,
+      { upstreamStatus: initial.status, upstreamContentType: initialType }
+    );
+  }
+
+  const cookie = getCookieHeader(initial);
+  const confirmedHeaders = new Headers(rangeHeaders);
+  confirmedHeaders.set("Referer", initial.url || downloadUrl.toString());
+  if (cookie) confirmedHeaders.set("Cookie", cookie);
+
+  const confirmed = await fetch(confirmedUrl, {
+    method: "GET",
+    redirect: "follow",
+    headers: confirmedHeaders
+  });
+  const confirmedType = (confirmed.headers.get("Content-Type") || "").toLowerCase();
+  if (confirmedType.includes("text/html")) {
+    const body = await confirmed.text();
+    return jsonError(
+      "O Google Drive não liberou o conteúdo do arquivo após a confirmação de download.",
+      502,
+      { upstreamStatus: confirmed.status, responsePreview: body.slice(0, 300) }
+    );
+  }
+  return confirmed;
+}
+
+async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "") {
   try {
-    const upstream = await fetch(driveUrl.toString(), {
-      method: "GET",
-      redirect: "follow",
-      headers
-    });
-
+    const upstream = await fetchDriveMedia(request, url, fileId, apiKey, mode, fileName);
     const contentType = upstream.headers.get("Content-Type") || "";
     if (!upstream.ok && contentType.includes("application/json")) {
       const data = await upstream.json().catch(() => ({}));
@@ -50,21 +131,11 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
 
     if (upstream.ok && contentType.includes("application/json")) {
       const data = await upstream.json().catch(() => ({}));
-      return jsonError(
-        data.error?.message || "O Google Drive retornou uma resposta inesperada.",
-        502
-      );
+      return jsonError(data.error?.message || "O Google Drive retornou uma resposta inesperada.", 502);
     }
 
     const responseHeaders = new Headers();
-    for (const name of [
-      "Content-Type",
-      "Content-Length",
-      "Content-Range",
-      "Accept-Ranges",
-      "ETag",
-      "Last-Modified"
-    ]) {
+    for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"]) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
@@ -99,7 +170,6 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
     return jsonError("Falha de comunicação com o Google Drive: " + error.message, 502);
   }
 }
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
