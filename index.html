@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#08090d">
+  <title>Drive TV Player</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">▶</span><span>DRIVE<span class="muted">PLAYER</span></span></div>
+    <div class="top-actions"><span id="status" class="status">Preparando biblioteca…</span><button id="refresh" class="icon-button" aria-label="Atualizar biblioteca">↻</button></div>
+  </header>
+  <main id="library">
+    <section class="hero">
+      <p class="eyebrow">SUA BIBLIOTECA</p>
+      <h1>Escolha o que assistir.</h1>
+      <p class="subheading">Seus vídeos do Google Drive, em um só lugar.</p>
+    </section>
+    <div id="message" class="message">Carregando vídeos…</div>
+    <section id="videos" class="video-grid" aria-label="Vídeos"></section>
+  </main>
+  <section id="player" class="player hidden" aria-label="Reprodutor de vídeo">
+    <div class="player-head"><button id="back" class="icon-button">← <span>Biblioteca</span></button><div id="now-playing" class="now-playing"></div></div>
+    <video id="video" controls playsinline preload="metadata"></video>
+    <div class="player-foot"><span>← / → : voltar ou avançar 10 segundos</span><span>ESC : voltar à biblioteca</span></div>
+  </section>
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
