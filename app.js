@@ -291,7 +291,7 @@
   }
 
   async function diagnoseMediaDelivery(sourceUrl) {
-    const result = { head: null, range: null };
+    const result = { head: null, signature: null, largerRange: null, offsetRange: null };
     const readHeaders = response => ({
       status: response.status,
       contentType: response.headers.get("Content-Type"),
@@ -300,6 +300,17 @@
       acceptRanges: response.headers.get("Accept-Ranges"),
       disposition: response.headers.get("Content-Disposition")
     });
+    const readRange = async (label, range) => {
+      const response = await fetch(sourceUrl, {
+        method: "GET",
+        headers: { Range: range },
+        cache: "no-store"
+      });
+      const headers = readHeaders(response);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return { label, range, ...headers, receivedBytes: bytes.byteLength, bytes };
+    };
+    const hex = bytes => Array.from(bytes).map(value => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
 
     try {
       const head = await fetch(sourceUrl, { method: "HEAD", cache: "no-store" });
@@ -309,35 +320,62 @@
     }
 
     try {
-      const partial = await fetch(sourceUrl, {
-        method: "GET",
-        headers: { Range: "bytes=0-1" },
-        cache: "no-store"
-      });
-      const headers = readHeaders(partial);
-      const bytes = await partial.arrayBuffer();
-      result.range = Object.assign({}, headers, { receivedBytes: bytes.byteLength });
+      const first = await readRange("início", "bytes=0-4095");
+      const signature = first.bytes.slice(0, 4);
+      const isMkv = signature.length === 4 &&
+        signature[0] === 0x1A && signature[1] === 0x45 &&
+        signature[2] === 0xDF && signature[3] === 0xA3;
+      result.signature = {
+        status: first.status,
+        contentType: first.contentType,
+        contentRange: first.contentRange,
+        receivedBytes: first.receivedBytes,
+        firstFourBytes: hex(signature),
+        isMkv
+      };
+      result.largerRange = {
+        status: first.status,
+        contentRange: first.contentRange,
+        receivedBytes: first.receivedBytes
+      };
     } catch (error) {
-      result.range = { error: error.message };
+      result.signature = { error: error.message };
+      result.largerRange = { error: error.message };
+    }
+
+    try {
+      const offset = await readRange("offset", "bytes=1048576-1052671");
+      result.offsetRange = {
+        status: offset.status,
+        contentRange: offset.contentRange,
+        receivedBytes: offset.receivedBytes
+      };
+    } catch (error) {
+      result.offsetRange = { error: error.message };
     }
 
     console.group("Diagnóstico de entrega do Google Drive");
     console.log("URL:", sourceUrl.replace(/([?&]key=)[^&]+/i, "$1[OCULTA]"));
     console.log("HEAD:", result.head);
-    console.log("Range bytes=0-1:", result.range);
+    console.log("Assinatura MKV e faixa inicial bytes=0-4095:", result.signature);
+    console.log("Faixa em offset bytes=1048576-1052671:", result.offsetRange);
     console.groupEnd();
 
     const headText = result.head.error
       ? "HEAD falhou: " + result.head.error
       : "HEAD " + result.head.status + " • " + (result.head.contentType || "sem MIME") +
-        " • tamanho " + (result.head.contentLength || "?") +
-        " • Accept-Ranges " + (result.head.acceptRanges || "?");
-    const rangeText = result.range.error
-      ? "Range falhou: " + result.range.error
-      : "Range " + result.range.status + " • " +
-        (result.range.contentRange || (result.range.receivedBytes + " bytes")) +
-        " • recebido " + result.range.receivedBytes + " byte(s)";
-    return { details: result, summary: headText + " • " + rangeText };
+        " • tamanho " + (result.head.contentLength || "?");
+    const signatureText = result.signature.error
+      ? "Assinatura falhou: " + result.signature.error
+      : "início " + result.signature.firstFourBytes +
+        (result.signature.isMkv ? " (MKV válido)" : " (não corresponde à assinatura MKV)") +
+        " • faixa " + result.signature.status + " / " + result.signature.receivedBytes + " bytes";
+    const offsetText = result.offsetRange.error
+      ? "offset falhou: " + result.offsetRange.error
+      : "offset " + result.offsetRange.status + " • " +
+        (result.offsetRange.contentRange || "?") +
+        " • recebido " + result.offsetRange.receivedBytes + " byte(s)";
+    return { details: result, summary: headText + " • " + signatureText + " • " + offsetText };
   }
 
   function launchNativePlayer(file, sourceUrl) {
@@ -461,7 +499,7 @@
     diagnoseButton.addEventListener("click", async () => {
       diagnoseButton.disabled = true;
       diagnoseButton.textContent = "Analisando…";
-      setPlaybackMessage("Consultando HEAD e GET Range (bytes=0-1) do Worker. Veja também o console do navegador para os detalhes.");
+      setPlaybackMessage("Verificando assinatura MKV, faixa inicial de 4 KB e uma faixa em outro ponto do arquivo. Veja também o console (F12).");
       try {
         const diagnostic = await diagnoseMediaDelivery(workerUrl);
         setPlaybackMessage("Diagnóstico do Worker: " + diagnostic.summary + ". Detalhes completos no console (F12).");
