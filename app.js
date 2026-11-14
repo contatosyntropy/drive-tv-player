@@ -259,7 +259,6 @@
     video.dataset.index = String(index);
     video.dataset.fallbackUsed = "false";
     clearSubtitle();
-    // Mantém o Google Drive como origem; Video.js gerencia a interface, não transcodifica codecs.
     const sourceUrl = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
     video.src = sourceUrl;
     video.load();
@@ -314,7 +313,7 @@
     }
     const code = video.error?.code;
     const detail = code === 4
-      ? "Formato ou endereço não suportado. Converta o vídeo para MP4 (H.264 + AAC) e confirme que está compartilhado como “Qualquer pessoa com o link”."
+      ? "O navegador não conseguiu reproduzir este arquivo ou o Google Drive não entregou o conteúdo em um formato compatível. Verifique se o arquivo está compartilhado como “Qualquer pessoa com o link”."
       : "O Google Drive não entregou o vídeo ao navegador. Verifique o compartilhamento e tente novamente.";
     setPlaybackMessage(detail);
     console.error("Falha ao reproduzir vídeo:", file.name, video.error);
