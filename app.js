@@ -387,27 +387,13 @@
     video.dataset.index = String(index);
     clearSubtitle();
 
-    const sourceUrl = apiUrl("/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name)) +
-      "?key=" + encodeURIComponent(config.apiKey);
+    // Entrega direta do Google Drive ao player nativo da LG.
+    // Não fazemos proxy/streaming pelo Worker: o player recebe a URL de mídia
+    // original do Drive, assim como no teste MKV externo que funcionou.
+    const sourceUrl = "https://www.googleapis.com/drive/v3/files/" +
+      encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
 
-    const isMkv = /\.mkv$/i.test(file.name || "");
-    let diagnostic = null;
-    if (isMkv) {
-      setPlaybackMessage("Verificando a entrega do MKV pelo Google Drive…");
-      diagnostic = await diagnoseMediaDelivery(sourceUrl);
-      const diagnosticText = [
-        "DIAGNÓSTICO DO MKV DO DRIVE",
-        "Arquivo: " + file.name,
-        "Tamanho informado pelo Drive: " + (file.size || "desconhecido") + " bytes",
-        diagnostic.summary,
-        "Anote ou fotografe esta mensagem. Ao confirmar, tentaremos abrir o player da LG."
-      ].join("\n\n");
-      setPlaybackMessage(diagnosticText);
-      // Keep the diagnostic visible before the native app takes the foreground.
-      window.alert(diagnosticText);
-    } else {
-      setPlaybackMessage("Tentando abrir no reprodutor nativo da LG…");
-    }
+    setPlaybackMessage("Abrindo o arquivo diretamente do Google Drive no reprodutor da LG…");
     const nativeResult = await launchNativePlayer(file, sourceUrl);
 
     if (nativeResult.ok) {
@@ -417,9 +403,7 @@
       video.load();
       player.classList.add("hidden");
       document.getElementById("library").classList.remove("hidden");
-      status.textContent = isMkv
-        ? "Diagnóstico MKV: " + diagnostic.summary
-        : "Reprodução transferida para a TV";
+      status.textContent = "Reprodução transferida para a TV";
       console.info("Player nativo da LG iniciado:", nativeResult.response);
       return;
     }
