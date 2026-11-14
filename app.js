@@ -88,7 +88,7 @@
       card.type = "button";
       card.innerHTML = '<span class="thumb"><span class="play">▶</span></span><span class="video-title"></span><span class="video-meta"></span>';
       card.querySelector(".video-title").textContent = file.name;
-      card.querySelector(".video-meta").textContent = formatSize(file.size) || "Vídeo";
+      card.querySelector(".video-meta").textContent = [file.folderPath, formatSize(file.size) || "Vídeo"].filter(Boolean).join(" • ");
       const thumb = card.querySelector(".thumb");
       if (file.thumbnailLink) {
         const img = document.createElement("img");
