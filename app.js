@@ -254,9 +254,8 @@
     video.dataset.index = String(index);
     video.dataset.fallbackUsed = "false";
     clearSubtitle();
-    // Prioriza a entrega de mídia pela Drive API, usada na versão que já reproduzia corretamente.
-    video.src = "https://www.googleapis.com/drive/v3/files/" +
-      encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
+    // Mantém o link direto do Drive como fonte principal, que era o método funcional antes da regressão.
+    video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
     video.load();
     loadSubtitle(file);
     video.play().catch(error => {
@@ -300,7 +299,8 @@
     if (!file) return;
     if (video.dataset.fallbackUsed !== "true") {
       video.dataset.fallbackUsed = "true";
-      video.src = "https://drive.google.com/uc?export=download&id=" + encodeURIComponent(file.id);
+      video.src = "https://www.googleapis.com/drive/v3/files/" +
+        encodeURIComponent(file.id) + "?alt=media&key=" + encodeURIComponent(config.apiKey);
       video.load();
       video.play().catch(() => {});
       return;
