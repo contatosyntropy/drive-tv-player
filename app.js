@@ -407,7 +407,6 @@
     const file = visibleVideos[index];
     if (!file) return;
     const preview = document.getElementById("drive-preview");
-    const closeButton = document.getElementById("close-player");
     if (!preview) {
       setMessage("O visualizador do Google Drive não foi encontrado.");
       return;
