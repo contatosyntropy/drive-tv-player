@@ -35,6 +35,27 @@
     objectUrls = [];
   }
 
+  async function verifyRangeSource(sourceUrl, expectedSize) {
+    message("Verificando leitura HTTP por partes no Google Drive…");
+    const response = await fetch(sourceUrl, {
+      method: "GET",
+      headers: { Range: "bytes=0-4095" },
+      cache: "no-store"
+    });
+    const contentRange = response.headers.get("Content-Range") || "";
+    const validRange = response.status === 206 && /^bytes\s+0-\d+\/\d+$/i.test(contentRange);
+    if (response.body) await response.body.cancel().catch(() => {});
+    if (!validRange) {
+      throw new Error("O Worker/Google Drive não confirmou HTTP Range. Esperado HTTP 206 com Content-Range; recebido HTTP " +
+        response.status + (contentRange ? " (" + contentRange + ")" : "") + ".");
+    }
+    const total = Number(contentRange.split("/").pop());
+    if (Number.isFinite(total) && expectedSize && total !== Number(expectedSize)) {
+      throw new Error("O tamanho informado pelo catálogo diverge do tamanho entregue por HTTP Range.");
+    }
+    return total;
+  }
+
   async function getFFmpeg() {
     if (ffmpeg) return ffmpeg;
     if (!window.FFmpeg || !window.FFmpeg.createFFmpeg) {
@@ -65,21 +86,27 @@
     running = true;
     releaseOutput();
     try {
-      message("Iniciando FFmpeg no hardware da TV. O arquivo original permanece no Google Drive.");
+      // Reject unsupported input before allocating WebAssembly memory.
+      if (Number(file.size) > 2000000000) {
+        throw new Error("Este arquivo tem " + (Number(file.size) / 1000000000).toFixed(2) + " GB. O FFmpeg.wasm 0.11 tem limite documentado de entrada de 2 GB.");
+      }
+
+      // Test the Worker -> Drive byte-range path independently from FFmpeg.
+      // Range I/O is handled by Emscripten's lazy filesystem, not FFmpeg's
+      // network protocol (disabled in the stock wasm core).
+      await verifyRangeSource(sourceUrl, file.size);
+
+      message("Iniciando FFmpeg na TV. O arquivo original permanece no Google Drive.");
       const engine = await getFFmpeg();
 
       try { engine.FS("unlink", "/input.mkv"); } catch (_) {}
       try {
-        // Emscripten performs ranged XHR from the FFmpeg worker on demand.
+        // Emscripten's lazy-file layer performs ranged XHR on demand.
         engine.FS("createLazyFile", "/", "input.mkv", sourceUrl, true, false);
       } catch (error) {
-        throw new Error("A compilação FFmpeg não disponibilizou leitura HTTP por partes (createLazyFile): " + error.message);
+        throw new Error("O core FFmpeg não expõe o sistema de arquivos lazy necessário para leitura por partes (createLazyFile). Detalhe: " + error.message);
       }
-
-      if (Number(file.size) > 2000000000) {
-        throw new Error("Este arquivo tem " + (Number(file.size) / 1000000000).toFixed(2) + " GB. O FFmpeg.wasm 0.11 tem limite documentado de entrada de 2 GB; este teste não consegue processá-lo por completo.");
-      }
-      message("Lendo o MKV por HTTP Range e convertendo o áudio para AAC…");
+      message("Leitura HTTP por partes confirmada. Convertendo o áudio para AAC…");
       await engine.run(
         "-i", "/input.mkv",
         "-t", String(MAX_TEST_SECONDS),
