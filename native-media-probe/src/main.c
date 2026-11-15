@@ -40,6 +40,75 @@ static void log_line(const char *message) {
     fprintf(stderr, "%s\n", message);
 }
 
+static const uint8_t FONT[26][7] = {
+    {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
+    {14,17,16,16,16,17,14}, {30,17,17,17,17,17,30},
+    {31,16,16,30,16,16,31}, {31,16,16,30,16,16,16},
+    {14,17,16,23,17,17,15}, {17,17,17,31,17,17,17},
+    {14,4,4,4,4,4,14}, {7,2,2,2,18,18,12},
+    {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
+    {17,27,21,21,17,17,17}, {17,25,21,19,17,17,17},
+    {14,17,17,17,17,17,14}, {30,17,17,30,16,16,16},
+    {14,17,17,17,21,18,13}, {30,17,17,30,20,18,17},
+    {15,16,16,14,1,1,30}, {31,4,4,4,4,4,4},
+    {17,17,17,17,17,17,14}, {17,17,17,17,17,10,4},
+    {17,17,17,21,21,21,10}, {17,17,10,4,10,17,17},
+    {17,17,10,4,4,4,4}, {31,1,2,4,8,16,31}
+};
+
+static void draw_text(SDL_Renderer *renderer, const char *text, int center_x,
+                      int y, int scale, SDL_Color color) {
+    int length = (int)strlen(text);
+    int x = center_x - ((length * 6 - 1) * scale) / 2;
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+
+    for (int i = 0; i < length; i++) {
+        char ch = text[i];
+        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+        if (ch < 'A' || ch > 'Z') {
+            x += 6 * scale;
+            continue;
+        }
+        const uint8_t *glyph = FONT[ch - 'A'];
+        for (int row = 0; row < 7; row++) {
+            for (int col = 0; col < 5; col++) {
+                if (glyph[row] & (1u << (4 - col))) {
+                    SDL_Rect pixel = {x + col * scale, y + row * scale, scale, scale};
+                    SDL_RenderFillRect(renderer, &pixel);
+                }
+            }
+        }
+        x += 6 * scale;
+    }
+}
+
+static void show_failure(SDL_Renderer *renderer, int width, int height, const char *message) {
+    SDL_SetRenderDrawColor(renderer, 70, 12, 18, 255);
+    SDL_RenderClear(renderer);
+    SDL_Color white = {255, 255, 255, 255};
+    SDL_Color pink = {255, 180, 180, 255};
+    int scale = width / 150;
+    if (scale < 4) scale = 4;
+    if (scale > 12) scale = 12;
+    draw_text(renderer, "MEDIA PROBE STOPPED", width / 2, height / 2 - 90, scale, white);
+    draw_text(renderer, message, width / 2, height / 2, scale, pink);
+    draw_text(renderer, "BACK TO EXIT", width / 2, height / 2 + 90, scale, white);
+    SDL_RenderPresent(renderer);
+    int running = 1;
+    while (running) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT ||
+                (event.type == SDL_KEYDOWN &&
+                 (event.key.keysym.sym == SDLK_ESCAPE ||
+                  event.key.keysym.sym == SDLK_BACKSPACE ||
+                  event.key.keysym.sym == SDLK_q))) running = 0;
+        }
+        SDL_Delay(20);
+    }
+}
+
+
 static void resource_released(const char *type) {
     char line[256];
     snprintf(line, sizeof(line), "NDL resource released: %s", type ? type : "?");
@@ -197,18 +266,6 @@ int main(int argc, char **argv) {
         return 4;
     }
 
-    const char *app_id = getenv("APPID");
-    if (!app_id) app_id = "com.syntropy.drivemediaprobe";
-    if (NDL_DirectMediaInit(app_id, resource_released) != 0) {
-        char line[512];
-        snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
-        log_line(line);
-        SDL_Quit();
-        munmap(mapping, reader.size);
-        return 5;
-    }
-    NDL_DirectMediaSetAppState(NDL_DIRECTMEDIA_APP_STATE_FOREGROUND);
-
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
         log_line(SDL_GetError());
         NDL_DirectMediaQuit();
@@ -250,6 +307,24 @@ int main(int argc, char **argv) {
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
 
+    /* Match the upstream sample: create the transparent SDL window BEFORE NDL init. */
+    const char *app_id = getenv("APPID");
+    if (!app_id) app_id = "com.syntropy.drivemediaprobe";
+    log_line("SDL window ready; initializing NDL DirectMedia");
+    if (NDL_DirectMediaInit(app_id, resource_released) != 0) {
+        char line[512];
+        snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
+        log_line(line);
+        show_failure(renderer, mode.w, mode.h, "NDL INIT FAILED");
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        munmap(mapping, reader.size);
+        return 5;
+    }
+    NDL_DirectMediaSetAppState(NDL_DIRECTMEDIA_APP_STATE_FOREGROUND);
+    log_line("NDL DirectMedia initialized");
+    
     NDL_DIRECTMEDIA_DATA_INFO_T info = {
         .video = {
             .width = VIDEO_WIDTH,
@@ -261,6 +336,7 @@ int main(int argc, char **argv) {
         char line[512];
         snprintf(line, sizeof(line), "NDL_DirectMediaLoad failed: %s", NDL_DirectMediaGetError());
         log_line(line);
+        show_failure(renderer, mode.w, mode.h, "NDL LOAD FAILED");
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         NDL_DirectMediaQuit();
