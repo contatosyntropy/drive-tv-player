@@ -476,37 +476,31 @@
     const file = visibleVideos[index];
     if (!file) return;
 
-    clearSubtitle();
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
+    const preview = document.getElementById("drive-preview");
+    if (!preview) {
+      setMessage("O visualizador do Google Drive não foi encontrado.");
+      return;
+    }
 
-    video.dataset.index = String(index);
+    preview.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
 
-    // O Worker entrega o arquivo binário puro via Drive API e suporta Range.
-    video.src = videoSourceUrl(file);
-    video.load();
-    loadSubtitle(file);
-
-    const playback = video.play();
-    if (playback && typeof playback.catch === "function") {
-      playback.catch(error => {
-        console.warn("Reprodução automática não iniciada:", error);
-        setPlaybackMessage("Pressione OK/Play no controle remoto para iniciar. " + error.message);
-      });
-    }
+    // Reprodução feita exclusivamente pelo visualizador oficial do Google Drive.
+    preview.src = "https://drive.google.com/file/d/" +
+      encodeURIComponent(file.id) + "/preview";
+    preview.focus();
   }
 
   function closePlayer() {
-    video.pause();
-    clearSubtitle();
-    video.removeAttribute("src");
-    video.load();
+    const preview = document.getElementById("drive-preview");
+    if (preview) {
+      preview.src = "about:blank";
+      preview.removeAttribute("src");
+    }
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
-    const selected = Number(video.dataset.index);
+    const selected = Number(preview?.dataset.index);
     const cards = grid.querySelectorAll(".video-card");
     if (Number.isInteger(selected) && cards[selected]) cards[selected].focus();
   }
