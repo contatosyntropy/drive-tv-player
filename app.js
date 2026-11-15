@@ -5,8 +5,8 @@
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
-  const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
-  const subtitlePattern = /\.(srt|vtt)$/i;
+  const supported = /\\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
+  const subtitlePattern = /\\.(srt|vtt)$/i;
 
   let items = [];
   let subtitleFiles = [];
@@ -27,7 +27,7 @@
   function setMessage(text) { message.textContent = text; }
 
   function apiUrl(path) {
-    const base = (config.apiBaseUrl || "").replace(/\/$/, "");
+    const base = (config.apiBaseUrl || "").replace(/\\/$/, "");
     return base + path;
   }
 
@@ -88,7 +88,7 @@
       items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
       const episodeCode = name => {
-        const match = name.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
+        const match = name.match(/\\bS(\\d{1,2})\\s*E(\\d{1,3})\\b/i);
         return match ? { season: Number(match[1]), episode: Number(match[2]) } : null;
       };
       items.sort((a, b) => {
@@ -187,14 +187,14 @@
   }
 
   function findSubtitle(videoFile) {
-    const videoBase = videoFile.name.replace(/\.[^.]+$/, "").trim().toLocaleLowerCase();
+    const videoBase = videoFile.name.replace(/\\.[^.]+$/, "").trim().toLocaleLowerCase();
     const sameFolder = subtitleFiles.find(file =>
       (file.folderPath || "") === (videoFile.folderPath || "") &&
-      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+      file.name.replace(/\\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
     );
     if (sameFolder) return sameFolder;
     const matches = subtitleFiles.filter(file =>
-      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+      file.name.replace(/\\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
     );
     return matches.length === 1 ? matches[0] : null;
   }
@@ -221,8 +221,6 @@
     }
   }
 
-
-
   async function loadSubtitle(videoFile) {
     clearSubtitle();
     const requestToken = subtitleLoadToken;
@@ -239,13 +237,13 @@
       const buffer = await response.arrayBuffer();
       if (requestToken !== subtitleLoadToken) return;
       if (!buffer.byteLength) throw new Error("O arquivo de legenda está vazio.");
-      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\uFEFF/, "");
-      if (/\.srt$/i.test(subtitle.name)) {
-        content = "WEBVTT\n\n" + content
-          .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")
-          .replace(/^\s*\d+\s*$/gm, "");
+      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\\uFEFF/, "");
+      if (/\\.srt$/i.test(subtitle.name)) {
+        content = "WEBVTT\\n\\n" + content
+          .replace(/(\\d{2}:\\d{2}:\\d{2}),(\\d{3})/g, "$1.$2")
+          .replace(/^\\s*\\d+\\s*$/gm, "");
       } else if (!content.trimStart().startsWith("WEBVTT")) {
-        content = "WEBVTT\n\n" + content;
+        content = "WEBVTT\\n\\n" + content;
       }
       if (requestToken !== subtitleLoadToken) return;
       subtitleUrl = URL.createObjectURL(new Blob([content], { type: "text/vtt;charset=utf-8" }));
@@ -266,37 +264,25 @@
   }
 
   function nativePlayerPayload(file, sourceUrl) {
-    // Prefer the actual container extension: Drive can return a generic MIME type.
-    const extension = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
+    const extension = (file.name.match(/\\.([^.]+)$/) || [])[1]?.toLowerCase();
     const mimeByExtension = {
-      mkv: "video/x-matroska",
-      mp4: "video/mp4",
-      m4v: "video/mp4",
-      webm: "video/webm",
-      mov: "video/quicktime",
-      avi: "video/x-msvideo",
-      mpg: "video/mpeg",
-      mpeg: "video/mpeg",
-      ts: "video/mp2t"
+      mkv: "video/x-matroska", mp4: "video/mp4", m4v: "video/mp4",
+      webm: "video/webm", mov: "video/quicktime", avi: "video/x-msvideo",
+      mpg: "video/mpeg", mpeg: "video/mpeg", ts: "video/mp2t"
     };
     const mime = mimeByExtension[extension] || file.mimeType || "application/octet-stream";
     return {
       fullPath: new URL(sourceUrl, window.location.href).href,
-      artist: "",
-      subtitle: "",
+      artist: "", subtitle: "",
       dlnaInfo: {
-        flagVal: 4096,
-        cleartextSize: String(file.size || -1),
-        contentLength: String(file.size || -1),
-        opVal: 1,
+        flagVal: 4096, cleartextSize: String(file.size || -1),
+        contentLength: String(file.size || -1), opVal: 1,
         protocolInfo: "http-get:*:" + mime + ":DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
         duration: 0
       },
-      mediaType: "VIDEO",
-      thumbnail: file.thumbnailLink || "",
-      deviceType: "DMR",
-      album: "",
-      fileName: file.name.replace(/\.[^.]+$/, ""),
+      mediaType: "VIDEO", thumbnail: file.thumbnailLink || "",
+      deviceType: "DMR", album: "",
+      fileName: file.name.replace(/\\.[^.]+$/, ""),
       lastPlayPosition: -1
     };
   }
@@ -304,21 +290,15 @@
   async function diagnoseMediaDelivery(sourceUrl, file) {
     const result = { head: null, ranges: [] };
     const readHeaders = response => ({
-      status: response.status,
-      contentType: response.headers.get("Content-Type"),
+      status: response.status, contentType: response.headers.get("Content-Type"),
       contentLength: response.headers.get("Content-Length"),
       contentRange: response.headers.get("Content-Range"),
       acceptRanges: response.headers.get("Accept-Ranges"),
       contentEncoding: response.headers.get("Content-Encoding"),
       disposition: response.headers.get("Content-Disposition")
     });
-    // Nunca carregar o arquivo inteiro na memória: lê apenas 16 bytes e cancela.
     const readRange = async (label, range, url = sourceUrl) => {
-      const response = await fetch(url, {
-        method: "GET",
-        headers: { Range: range },
-        cache: "no-store"
-      });
+      const response = await fetch(url, { method: "GET", headers: { Range: range }, cache: "no-store" });
       const headers = readHeaders(response);
       let sample = new Uint8Array(0);
       if (response.body) {
@@ -330,48 +310,25 @@
           await reader.cancel().catch(() => {});
         }
       }
-      return {
-        label, range, ...headers,
-        sampleHex: Array.from(sample).map(value => value.toString(16).padStart(2, "0").toUpperCase()).join(" ")
-      };
+      return { label, range, ...headers, sampleHex: Array.from(sample).map(value => value.toString(16).padStart(2, "0").toUpperCase()).join(" ") };
     };
-
     try {
       const head = await fetch(sourceUrl, { method: "HEAD", cache: "no-store" });
       result.head = readHeaders(head);
       const size = Number(result.head.contentLength || file?.size || 0);
-      const ranges = [
-        ["início", "bytes=0-4095"],
-        ["1 MiB", "bytes=1048576-1052671"]
-      ];
+      const ranges = [["início", "bytes=0-4095"], ["1 MiB", "bytes=1048576-1052671"]];
       if (Number.isSafeInteger(size) && size > 8192) {
-        const middle = Math.floor(size / 2);
-        const late = Math.floor(size * 0.9);
-        ranges.push(
-          ["meio", "bytes=" + middle + "-" + (middle + 4095)],
-          ["90%", "bytes=" + late + "-" + (late + 4095)],
-          ["final", "bytes=" + Math.max(0, size - 4096) + "-" + (size - 1)]
-        );
+        const middle = Math.floor(size / 2), late = Math.floor(size * 0.9);
+        ranges.push(["meio", "bytes=" + middle + "-" + (middle + 4095)], ["90%", "bytes=" + late + "-" + (late + 4095)], ["final", "bytes=" + Math.max(0, size - 4096) + "-" + (size - 1)]);
       }
       for (const [label, range] of ranges) {
         try { result.ranges.push(await readRange(label, range)); }
         catch (error) { result.ranges.push({ label, range, error: error.message }); }
       }
-    } catch (error) {
-      result.head = { error: error.message };
-    }
-
-    // Referência externa que já foi reproduzida no player nativo da TV.
+    } catch (error) { result.head = { error: error.message }; }
     try {
-      result.externalReference = await readRange(
-        "MKV externo conhecido",
-        "bytes=900000-900255",
-        apiUrl("/api/reference-mkv")
-      );
-    } catch (error) {
-      result.externalReference = { error: error.message };
-    }
-
+      result.externalReference = await readRange("MKV externo conhecido", "bytes=900000-900255", apiUrl("/api/reference-mkv"));
+    } catch (error) { result.externalReference = { error: error.message }; }
     console.group("Diagnóstico de entrega de mídia");
     console.log("Arquivo:", file?.name || "atual");
     console.log("HEAD Worker:", result.head);
@@ -381,55 +338,35 @@
     const head = result.head || {};
     const lines = [
       "Diagnóstico HTTP — " + (file?.name || "arquivo"),
-      "HEAD: " + (head.status || "falhou") + " • " + (head.contentType || "sem MIME") +
-        " • tamanho " + (head.contentLength || "?") + " • Accept-Ranges " + (head.acceptRanges || "?"),
-      ...result.ranges.map(item =>
-        item.label + ": " + (item.status || "falhou") + " • " +
-        (item.contentRange || "sem Content-Range") + " • " +
-        (item.contentLength || "?") + " bytes declarados" +
-        (item.error ? " • " + item.error : "")
-      ),
-      "MKV externo: " + (result.externalReference.status || "falhou") + " • " +
-        (result.externalReference.contentRange || "sem Content-Range")
+      "HEAD: " + (head.status || "falhou") + " • " + (head.contentType || "sem MIME") + " • tamanho " + (head.contentLength || "?") + " • Accept-Ranges " + (head.acceptRanges || "?"),
+      ...result.ranges.map(item => item.label + ": " + (item.status || "falhou") + " • " + (item.contentRange || "sem Content-Range") + " • " + (item.contentLength || "?") + " bytes declarados" + (item.error ? " • " + item.error : "")),
+      "MKV externo: " + (result.externalReference.status || "falhou") + " • " + (result.externalReference.contentRange || "sem Content-Range")
     ];
-    return { details: result, summary: lines.join("\n") };
+    return { details: result, summary: lines.join("\\n") };
   }
+
   function launchNativePlayer(file, sourceUrl) {
     const payload = nativePlayerPayload(file, sourceUrl);
     const params = { payload: [payload] };
-
-    // webOS TV 6.x uses the Media Discovery app for the built-in media player.
-    if (window.webOS && window.webOS.service &&
-        typeof window.webOS.service.request === "function") {
+    if (window.webOS && window.webOS.service && typeof window.webOS.service.request === "function") {
       return new Promise(resolve => {
         window.webOS.service.request("luna://com.webos.applicationManager", {
-          method: "launch",
-          parameters: {
-            id: "com.webos.app.mediadiscovery",
-            params
-          },
+          method: "launch", parameters: { id: "com.webos.app.mediadiscovery", params },
           onSuccess: response => resolve({ ok: true, response }),
           onFailure: error => resolve({ ok: false, error })
         });
       });
     }
-
     if (window.webOSDev && typeof window.webOSDev.launch === "function") {
       return new Promise(resolve => {
         window.webOSDev.launch({
-          id: "com.webos.app.mediadiscovery",
-          params,
+          id: "com.webos.app.mediadiscovery", params,
           onSuccess: response => resolve({ ok: true, response }),
           onFailure: error => resolve({ ok: false, error })
         });
       });
     }
-
-    return Promise.resolve({
-      ok: false,
-      unavailable: true,
-      error: { errorText: "As APIs webOS não estão disponíveis nesta sessão do navegador." }
-    });
+    return Promise.resolve({ ok: false, unavailable: true, error: { errorText: "As APIs webOS não estão disponíveis nesta sessão do navegador." } });
   }
 
   function directDriveUrls(file) {
@@ -441,20 +378,14 @@
   }
 
   function openDirectSource(source) {
-    // Abre a URL fora do elemento <video>. Assim o navegador pode exibir a
-    // confirmação do Drive ou iniciar o download sem exigir suporte a MKV.
     const opened = window.open(source.url, "_blank", "noopener");
-    if (opened) {
-      setPlaybackMessage(source.label + " aberto em uma nova aba. Observe se o Drive mostra uma confirmação ou inicia o download.");
-    } else {
-      setPlaybackMessage("O navegador bloqueou a nova aba. Permita pop-ups para este site e tente novamente.");
-    }
+    if (opened) setPlaybackMessage(source.label + " aberto em uma nova aba. Observe se o Drive mostra uma confirmação ou inicia o download.");
+    else setPlaybackMessage("O navegador bloqueou a nova aba. Permita pop-ups para este site e tente novamente.");
   }
 
   async function tryDirectSource(file, source) {
     setPlaybackMessage("Enviando " + source.label + " ao player nativo da TV…");
-    if (window.webOS && window.webOS.service &&
-        typeof window.webOS.service.request === "function") {
+    if (window.webOS && window.webOS.service && typeof window.webOS.service.request === "function") {
       const nativeResult = await launchNativePlayer(file, source.url);
       if (nativeResult.ok) {
         video.pause();
@@ -465,8 +396,7 @@
         status.textContent = "Reprodução transferida para a TV (" + source.label + ")";
         return;
       }
-      setPlaybackMessage("O player da TV recusou " + source.label + ": " +
-        (nativeResult.error?.errorText || nativeResult.error?.message || "erro não identificado"));
+      setPlaybackMessage("O player da TV recusou " + source.label + ": " + (nativeResult.error?.errorText || nativeResult.error?.message || "erro não identificado"));
       return;
     }
     setPlaybackMessage("Este teste abre o player nativo da TV. No computador, use os botões de abrir origem ou diagnosticar Worker; o navegador pode não reproduzir MKV.");
@@ -475,21 +405,20 @@
   function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
-
     const preview = document.getElementById("drive-preview");
+    const closeButton = document.getElementById("close-player");
     if (!preview) {
       setMessage("O visualizador do Google Drive não foi encontrado.");
       return;
     }
-
     preview.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
+    preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
 
-    // Reprodução feita exclusivamente pelo visualizador oficial do Google Drive.
-    preview.src = "https://drive.google.com/file/d/" +
-      encodeURIComponent(file.id) + "/preview";
-    preview.focus();
+    // Mantém o foco no app, não dentro do iframe cross-origin. Assim a tecla
+    // Back do controle LG continua chegando ao listener desta página.
+    closeButton?.focus();
   }
 
   function closePlayer() {
@@ -507,15 +436,23 @@
 
   document.getElementById("close-player")?.addEventListener("click", closePlayer);
 
-  document.addEventListener("keydown", event => {
+  function handleRemoteBack(event) {
     if (player.classList.contains("hidden")) return;
-    // Volta à biblioteca pelo botão Back do controle remoto LG.
-    if (event.key === "Escape" || event.key === "Backspace" ||
-        event.key === "GoBack" || event.keyCode === 461) {
-      event.preventDefault();
-      closePlayer();
-    }
-  });
+    const isBack = event.key === "Escape" ||
+      event.key === "Backspace" ||
+      event.key === "GoBack" ||
+      event.key === "BrowserBack" ||
+      event.keyCode === 461;
+    if (!isBack) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    closePlayer();
+  }
+
+  // Capture antecipado para interceptar o botão físico Voltar do Magic Remote.
+  window.addEventListener("keydown", handleRemoteBack, true);
+  document.addEventListener("keydown", handleRemoteBack, true);
 
   document.getElementById("refresh").addEventListener("click", loadLibrary);
   function setPlaybackMessage(text) {
@@ -528,7 +465,6 @@
     }
     notice.textContent = text;
   }
-
 
   loadLibrary();
 })();
