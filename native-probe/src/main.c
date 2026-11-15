@@ -1,8 +1,10 @@
 #include <SDL.h>
+#include <curl/curl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static const uint8_t FONT[26][7] = {
     {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
@@ -30,6 +32,78 @@ static void write_log(const char *message) {
         fclose(file);
     }
     fprintf(stderr, "%s\n", message);
+}
+
+typedef struct {
+    size_t bytes;
+    char content_range[128];
+} HttpProbe;
+
+static size_t receive_body(char *data, size_t size, size_t count, void *opaque) {
+    (void)data;
+    HttpProbe *probe = (HttpProbe *)opaque;
+    size_t bytes = size * count;
+    probe->bytes += bytes;
+    return bytes;
+}
+
+static size_t receive_header(char *data, size_t size, size_t count, void *opaque) {
+    HttpProbe *probe = (HttpProbe *)opaque;
+    size_t bytes = size * count;
+    if (bytes > 14 && !strncasecmp(data, "Content-Range:", 14)) {
+        size_t start = 14;
+        while (start < bytes && (data[start] == ' ' || data[start] == '\\t')) start++;
+        size_t length = bytes - start;
+        while (length && (data[start + length - 1] == '\\r' || data[start + length - 1] == '\\n')) length--;
+        if (length >= sizeof(probe->content_range)) length = sizeof(probe->content_range) - 1;
+        memcpy(probe->content_range, data + start, length);
+        probe->content_range[length] = 0;
+    }
+    return bytes;
+}
+
+static int verify_https_range(char *result, size_t result_size) {
+    CURL *curl;
+    CURLcode code;
+    long status = 0;
+    HttpProbe probe = {0, ""};
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    curl = curl_easy_init();
+    if (!curl) {
+        snprintf(result, result_size, "libcurl initialization failed");
+        curl_global_cleanup();
+        return 0;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, "https://drive-tv-player.contatosyntropy.workers.dev/api/reference-mkv");
+    curl_easy_setopt(curl, CURLOPT_RANGE, "0-4095");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 45L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DriveTVNativeProbe/0.2");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive_body);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &probe);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, receive_header);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &probe);
+    code = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    if (code == CURLE_OK && status == 206 && probe.bytes > 0 &&
+        !strncasecmp(probe.content_range, "bytes 0-", 8)) {
+        snprintf(result, result_size, "HTTPS RANGE OK");
+        write_log("HTTPS RANGE OK - resposta 206 recebida do Worker por TLS.");
+    } else {
+        snprintf(result, result_size, "HTTPS RANGE FAILED");
+        char detail[512];
+        snprintf(detail, sizeof(detail), "HTTPS RANGE FAILED - curl=%s; HTTP=%ld; bytes=%lu; range=%s",
+                 curl_easy_strerror(code), status, (unsigned long)probe.bytes,
+                 probe.content_range[0] ? probe.content_range : "(missing)");
+        write_log(detail);
+    }
+    curl_easy_cleanup(curl);
+    curl_global_cleanup();
+    return code == CURLE_OK && status == 206 && probe.bytes > 0;
 }
 
 static void draw_text(SDL_Renderer *renderer, const char *text, int center_x,
@@ -103,6 +177,8 @@ int main(int argc, char **argv) {
     }
 
     write_log("NATIVE APP OK - executavel ARM iniciado e janela SDL criada.");
+    char network_status[64] = "CHECKING HTTPS";
+    int network_ok = verify_https_range(network_status, sizeof(network_status));
     int scale = width / 150;
     if (scale < 5) scale = 5;
     if (scale > 16) scale = 16;
@@ -119,7 +195,7 @@ int main(int argc, char **argv) {
     SDL_Color muted = {165, 170, 190, 255};
     draw_text(renderer, "DRIVE TV PLAYER", width / 2, height / 2 - 90 * scale / 8, scale, white);
     draw_text(renderer, "NATIVE APP OK", width / 2, height / 2 - 10 * scale / 8, scale, purple);
-    draw_text(renderer, "ARM PROCESS RUNNING", width / 2, height / 2 + 70 * scale / 8, scale, white);
+    draw_text(renderer, network_ok ? "HTTPS RANGE OK" : "HTTPS RANGE FAILED", width / 2, height / 2 + 70 * scale / 8, scale, network_ok ? purple : white);
     draw_text(renderer, "BACK TO EXIT", width / 2, height / 2 + 170 * scale / 8, scale, muted);
     SDL_RenderPresent(renderer);
 
