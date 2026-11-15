@@ -266,9 +266,25 @@ int main(int argc, char **argv) {
         return 4;
     }
 
+    /* webOS ordering from the upstream NDL sample:
+     * SDL_Init(0) -> NDL_DirectMediaInit -> SDL_INIT_VIDEO/window.
+     * Initializing the SDL video subsystem before NDL can leave the TV video plane black. */
+    const char *app_id = getenv("APPID");
+    if (!app_id) app_id = "com.syntropy.drivemediaprobe";
+    log_line("SDL preinit ready; initializing NDL DirectMedia before SDL video");
+    int ndl_init_rc = NDL_DirectMediaInit(app_id, resource_released);
+    if (ndl_init_rc != 0) {
+        char line[512];
+        snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
+        log_line(line);
+    } else {
+        NDL_DirectMediaSetAppState(NDL_DIRECTMEDIA_APP_STATE_FOREGROUND);
+        log_line("NDL DirectMedia initialized");
+    }
+
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
         log_line(SDL_GetError());
-        NDL_DirectMediaQuit();
+        if (ndl_init_rc == 0) NDL_DirectMediaQuit();
         SDL_Quit();
         munmap(mapping, reader.size);
         return 6;
@@ -277,7 +293,7 @@ int main(int argc, char **argv) {
     SDL_DisplayMode mode;
     if (SDL_GetCurrentDisplayMode(0, &mode) != 0) {
         log_line("SDL_GetCurrentDisplayMode failed");
-        NDL_DirectMediaQuit();
+        if (ndl_init_rc == 0) NDL_DirectMediaQuit();
         SDL_Quit();
         munmap(mapping, reader.size);
         return 7;
@@ -288,7 +304,7 @@ int main(int argc, char **argv) {
         mode.w, mode.h, SDL_WINDOW_FULLSCREEN);
     if (!window) {
         log_line(SDL_GetError());
-        NDL_DirectMediaQuit();
+        if (ndl_init_rc == 0) NDL_DirectMediaQuit();
         SDL_Quit();
         munmap(mapping, reader.size);
         return 8;
@@ -297,7 +313,7 @@ int main(int argc, char **argv) {
     if (!renderer) {
         log_line(SDL_GetError());
         SDL_DestroyWindow(window);
-        NDL_DirectMediaQuit();
+        if (ndl_init_rc == 0) NDL_DirectMediaQuit();
         SDL_Quit();
         munmap(mapping, reader.size);
         return 9;
@@ -307,14 +323,7 @@ int main(int argc, char **argv) {
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
 
-    /* Match the upstream sample: create the transparent SDL window BEFORE NDL init. */
-    const char *app_id = getenv("APPID");
-    if (!app_id) app_id = "com.syntropy.drivemediaprobe";
-    log_line("SDL window ready; initializing NDL DirectMedia");
-    if (NDL_DirectMediaInit(app_id, resource_released) != 0) {
-        char line[512];
-        snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
-        log_line(line);
+    if (ndl_init_rc != 0) {
         show_failure(renderer, mode.w, mode.h, "NDL INIT FAILED");
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
@@ -322,8 +331,6 @@ int main(int argc, char **argv) {
         munmap(mapping, reader.size);
         return 5;
     }
-    NDL_DirectMediaSetAppState(NDL_DIRECTMEDIA_APP_STATE_FOREGROUND);
-    log_line("NDL DirectMedia initialized");
     
     NDL_DIRECTMEDIA_DATA_INFO_T info = {
         .video = {
