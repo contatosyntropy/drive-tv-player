@@ -5,8 +5,8 @@
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
-  const supported = /\\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
-  const subtitlePattern = /\\.(srt|vtt)$/i;
+  const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
+  const subtitlePattern = /\.(srt|vtt)$/i;
 
   let items = [];
   let subtitleFiles = [];
@@ -27,7 +27,7 @@
   function setMessage(text) { message.textContent = text; }
 
   function apiUrl(path) {
-    const base = (config.apiBaseUrl || "").replace(/\\/$/, "");
+    const base = (config.apiBaseUrl || "").replace(/\/$/, "");
     return base + path;
   }
 
@@ -88,7 +88,7 @@
       items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
       const episodeCode = name => {
-        const match = name.match(/\\bS(\\d{1,2})\\s*E(\\d{1,3})\\b/i);
+        const match = name.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
         return match ? { season: Number(match[1]), episode: Number(match[2]) } : null;
       };
       items.sort((a, b) => {
@@ -187,14 +187,14 @@
   }
 
   function findSubtitle(videoFile) {
-    const videoBase = videoFile.name.replace(/\\.[^.]+$/, "").trim().toLocaleLowerCase();
+    const videoBase = videoFile.name.replace(/\.[^.]+$/, "").trim().toLocaleLowerCase();
     const sameFolder = subtitleFiles.find(file =>
       (file.folderPath || "") === (videoFile.folderPath || "") &&
-      file.name.replace(/\\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
     );
     if (sameFolder) return sameFolder;
     const matches = subtitleFiles.filter(file =>
-      file.name.replace(/\\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
     );
     return matches.length === 1 ? matches[0] : null;
   }
@@ -237,13 +237,13 @@
       const buffer = await response.arrayBuffer();
       if (requestToken !== subtitleLoadToken) return;
       if (!buffer.byteLength) throw new Error("O arquivo de legenda está vazio.");
-      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\\uFEFF/, "");
-      if (/\\.srt$/i.test(subtitle.name)) {
-        content = "WEBVTT\\n\\n" + content
-          .replace(/(\\d{2}:\\d{2}:\\d{2}),(\\d{3})/g, "$1.$2")
-          .replace(/^\\s*\\d+\\s*$/gm, "");
+      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\uFEFF/, "");
+      if (/\.srt$/i.test(subtitle.name)) {
+        content = "WEBVTT\n\n" + content
+          .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")
+          .replace(/^\s*\d+\s*$/gm, "");
       } else if (!content.trimStart().startsWith("WEBVTT")) {
-        content = "WEBVTT\\n\\n" + content;
+        content = "WEBVTT\n\n" + content;
       }
       if (requestToken !== subtitleLoadToken) return;
       subtitleUrl = URL.createObjectURL(new Blob([content], { type: "text/vtt;charset=utf-8" }));
@@ -264,7 +264,7 @@
   }
 
   function nativePlayerPayload(file, sourceUrl) {
-    const extension = (file.name.match(/\\.([^.]+)$/) || [])[1]?.toLowerCase();
+    const extension = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
     const mimeByExtension = {
       mkv: "video/x-matroska", mp4: "video/mp4", m4v: "video/mp4",
       webm: "video/webm", mov: "video/quicktime", avi: "video/x-msvideo",
@@ -282,7 +282,7 @@
       },
       mediaType: "VIDEO", thumbnail: file.thumbnailLink || "",
       deviceType: "DMR", album: "",
-      fileName: file.name.replace(/\\.[^.]+$/, ""),
+      fileName: file.name.replace(/\.[^.]+$/, ""),
       lastPlayPosition: -1
     };
   }
@@ -342,7 +342,7 @@
       ...result.ranges.map(item => item.label + ": " + (item.status || "falhou") + " • " + (item.contentRange || "sem Content-Range") + " • " + (item.contentLength || "?") + " bytes declarados" + (item.error ? " • " + item.error : "")),
       "MKV externo: " + (result.externalReference.status || "falhou") + " • " + (result.externalReference.contentRange || "sem Content-Range")
     ];
-    return { details: result, summary: lines.join("\\n") };
+    return { details: result, summary: lines.join("\n") };
   }
 
   function launchNativePlayer(file, sourceUrl) {
@@ -452,7 +452,6 @@
 
   // Capture antecipado para interceptar o botão físico Voltar do Magic Remote.
   window.addEventListener("keydown", handleRemoteBack, true);
-  document.addEventListener("keydown", handleRemoteBack, true);
 
   document.getElementById("refresh").addEventListener("click", loadLibrary);
   function setPlaybackMessage(text) {
