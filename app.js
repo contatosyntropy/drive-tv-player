@@ -505,6 +505,8 @@
     if (Number.isInteger(selected) && cards[selected]) cards[selected].focus();
   }
 
+  document.getElementById("close-player")?.addEventListener("click", closePlayer);
+
   document.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
     // Volta à biblioteca pelo botão Back do controle remoto LG.
