@@ -11,6 +11,7 @@ on:
       - "config.js"
       - "webos-app/**"
       - "native-probe/**"
+      - "native-media-probe/**"
       - ".github/workflows/build-webos.yml"
 
 permissions:
@@ -54,7 +55,7 @@ jobs:
       - name: Build native ARM probe
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake pkg-config
+          sudo apt-get install -y cmake pkg-config ffmpeg
           SDK_ARCHIVE="$RUNNER_TEMP/webos-native-sdk.tar.gz"
           SDK_URL="https://github.com/openlgtv/buildroot-nc4/releases/download/2026.08-webos/arm-webos-linux-gnueabi_sdk-buildroot-x86_64.tar.gz"
           curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 "$SDK_URL" -o "$SDK_ARCHIVE"
@@ -68,6 +69,14 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$SDK/share/buildroot/toolchainfile.cmake" \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build/native-probe --parallel 2
+          # Generate a short H.264 elementary stream for the hardware decoder test.
+          mkdir -p build/native-media-probe/package
+          ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1280x720:rate=24' -t 5 -an -c:v libx264 -preset ultrafast -profile:v main -pix_fmt yuv420p -x264-params 'aud=1:keyint=48:min-keyint=48:scenecut=0:bframes=0' -f h264 build/native-media-probe/package/sample.h264
+          cmake -S native-media-probe -B build/native-media-probe -DCMAKE_TOOLCHAIN_FILE="$SDK/share/buildroot/toolchainfile.cmake" -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/native-media-probe --parallel 2
+
+          cp native-media-probe/appinfo.json build/native-media-probe/package/
+          cp build/native-media-probe/drive-tv-native-media-probe build/native-media-probe/package/
           mkdir -p build/native-probe/package
           cp native-probe/appinfo.json build/native-probe/package/
           cp build/native-probe/drive-tv-native-probe build/native-probe/package/
@@ -98,17 +107,20 @@ jobs:
           with open("build/native-probe/package/icon.png", "wb") as f:
               f.write(png)
           PY
+          cp build/native-probe/package/icon.png build/native-media-probe/package/icon.png
           file build/native-probe/package/drive-tv-native-probe
           readelf -h build/native-probe/package/drive-tv-native-probe | grep -E 'Class:|Machine:'
 
       - name: Package IPKs
         run: |
-          mkdir -p dist/web-app dist/native-probe
+          mkdir -p dist/web-app dist/native-probe dist/native-media-probe
           ares-config --profile tv
           ares-package --no-minify --outdir dist/web-app ./build/webos-app
           ares-package --no-minify --outdir dist/native-probe ./build/native-probe/package
+          ares-package --no-minify --outdir dist/native-media-probe ./build/native-media-probe/package
           test -n "$(find dist/web-app -maxdepth 1 -type f -name '*.ipk' -print -quit)"
           test -n "$(find dist/native-probe -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+          test -n "$(find dist/native-media-probe -maxdepth 1 -type f -name '*.ipk' -print -quit)"
 
       - name: Upload webOS player package
         uses: actions/upload-artifact@v4
@@ -123,5 +135,13 @@ jobs:
         with:
           name: drive-tv-native-probe-ipk
           path: dist/native-probe/*.ipk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native hardware media probe package
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-tv-native-media-probe-ipk
+          path: dist/native-media-probe/*.ipk
           if-no-files-found: error
           retention-days: 14
