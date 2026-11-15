@@ -5,80 +5,12 @@
 
 .direct-source-tests{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}.source-test-hint{color:var(--muted);font-size:12px}.source-test-button{font-size:12px;padding:8px 10px;white-space:nowrap}@media(max-width:900px){.player-head{flex-wrap:wrap}.direct-source-tests{order:3;width:100%;margin:0}.source-test-button{font-size:11px;padding:7px 9px}}
 
-/* Google Drive preview player */
-.drive-preview{display:block;width:100%;height:calc(100vh - 130px);flex:1;min-height:0;border:0;background:#000;margin:12px 0}.player{padding:12px 2vw}.player-head{flex-shrink:0}.player-foot{flex-shrink:0}@media(max-width:650px){.drive-preview{height:calc(100vh - 110px);margin:6px 0}.player{padding:8px}}
-
-/* Kept hidden for shared playback and subtitle lifecycle code */
-.legacy-video{display:none!important}
-
-/* The legacy HTML5 video must remain hidden while Drive Preview is active. */
-.player video.legacy-video{display:none!important}
-
-#playback-message{white-space:pre-line;line-height:1.5;max-height:32vh;overflow:auto}
-
-
-/* Playback is the Google Drive Preview itself; keep it edge-to-edge. */
-.player{
-  position:fixed;
-  inset:0;
-  width:100vw;
-  height:100vh;
-  padding:0;
-  margin:0;
-  overflow:hidden;
-  background:#000;
-  display:block;
-}
-.drive-preview{
-  position:absolute;
-  inset:0;
-  display:block;
-  width:100%;
-  height:100%;
-  min-height:100%;
-  margin:0;
-  padding:0;
-  border:0;
-  background:#000;
-}
-.player-head{
-  position:absolute;
-  z-index:10;
-  top:0;
-  left:0;
-  right:0;
-  min-height:64px;
-  padding:10px 18px;
-  display:flex;
-  align-items:center;
-  gap:14px;
-  background:linear-gradient(180deg,rgba(0,0,0,.82),rgba(0,0,0,0));
-  pointer-events:none;
-}
-.player-head button{
-  pointer-events:auto;
-  background:rgba(12,12,16,.78);
-  border-color:#ffffff55;
-  font-size:15px;
-}
-.now-playing{
-  max-width:70vw;
-  color:#fff;
-  text-shadow:0 1px 4px #000;
-  font-size:14px;
-}
-.player-foot{display:none!important}
-.player video.legacy-video{display:none!important}
-
-
-/* Reprodução direta pelo elemento HTML5 video, sem interface do Google Drive. */
+/* Reprodução em tela cheia pelo Google Drive Preview, sem controles externos. */
 .player {
   position: fixed;
   inset: 0;
   z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   width: 100vw;
   height: 100vh;
   padding: 0;
@@ -86,24 +18,21 @@
   overflow: hidden;
   background: #000;
 }
-.player video.native-video {
+.drive-preview {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
-  max-width: 100vw;
-  max-height: 100vh;
+  min-height: 100%;
   margin: 0;
-  object-fit: contain;
+  padding: 0;
+  border: 0;
   background: #000;
 }
-#playback-message {
-  position: absolute;
-  z-index: 2;
-  left: 3vw;
-  right: 3vw;
-  bottom: 3vh;
-  padding: 10px 14px;
-  color: #fff;
-  background: rgba(0,0,0,.78);
-  border-radius: 8px;
+@media(max-width:650px) {
+  .player, .drive-preview {
+    width: 100vw;
+    height: 100vh;
+  }
 }
