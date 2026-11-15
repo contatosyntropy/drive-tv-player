@@ -36,3 +36,24 @@
     height: 100vh;
   }
 }
+
+
+/* Ação externa mínima para sair do Google Drive Preview. */
+.close-player {
+  position: absolute;
+  z-index: 30;
+  top: max(16px, env(safe-area-inset-top));
+  left: max(16px, env(safe-area-inset-left));
+  padding: 12px 18px;
+  border: 1px solid rgba(255,255,255,.45);
+  border-radius: 8px;
+  color: #fff;
+  background: rgba(0,0,0,.82);
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+.close-player:focus {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
