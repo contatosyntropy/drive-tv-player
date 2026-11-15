@@ -72,13 +72,31 @@ jobs:
           cp native-probe/appinfo.json build/native-probe/package/
           cp build/native-probe/drive-tv-native-probe build/native-probe/package/
           python3 - <<'PY'
-          from PIL import Image, ImageDraw
-          image = Image.new("RGB", (80, 80), "#08090d")
-          draw = ImageDraw.Draw(image)
-          draw.rounded_rectangle((4, 4, 76, 76), radius=16, fill="#8b5cf6")
-          draw.rectangle((22, 22, 58, 58), outline="#ffffff", width=5)
-          draw.line((30, 40, 38, 48, 52, 31), fill="#ffffff", width=5)
-          image.save("build/native-probe/package/icon.png")
+          import struct, zlib
+          width = height = 80
+          rows = []
+          for y in range(height):
+              row = bytearray([0])
+              for x in range(width):
+                  inside = 5 <= x < 75 and 5 <= y < 75
+                  check = (21 <= x < 59 and 21 <= y < 59 and
+                           (x in (21, 22, 57, 58) or y in (21, 22, 57, 58)))
+                  if check:
+                      row.extend((255, 255, 255))
+                  elif inside:
+                      row.extend((139, 92, 246))
+                  else:
+                      row.extend((8, 9, 13))
+              rows.append(bytes(row))
+          def chunk(kind, data):
+              body = kind + data
+              return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xffffffff)
+          png = (b"\\x89PNG\\r\\n\\x1a\\n" +
+                 chunk(b"IHDR", struct.pack(">2I5B", width, height, 8, 2, 0, 0, 0)) +
+                 chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) +
+                 chunk(b"IEND", b""))
+          with open("build/native-probe/package/icon.png", "wb") as f:
+              f.write(png)
           PY
           file build/native-probe/package/drive-tv-native-probe
           readelf -h build/native-probe/package/drive-tv-native-probe | grep -E 'Class:|Machine:'
