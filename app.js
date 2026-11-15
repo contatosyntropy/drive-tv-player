@@ -422,8 +422,10 @@
     }
 
     preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
-    // O foco no iframe permite controlar o player oficial do Google pelo controle.
-    preview.focus();
+    // No navegador comum, focar o iframe facilita a navegação do player.
+    // No IPK webOS, esse foco ativa uma segunda camada nativa de controles
+    // sobre a interface do Google. Mantemos o foco fora do iframe na TV.
+    if (!window.PalmSystem) preview.focus();
   }
 
   function closePlayer(fromHistory = false) {
