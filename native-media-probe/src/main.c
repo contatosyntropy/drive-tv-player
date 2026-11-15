@@ -40,6 +40,12 @@ static void log_line(const char *message) {
     fprintf(stderr, "%s\n", message);
 }
 
+static void resource_released(const char *type) {
+    char line[256];
+    snprintf(line, sizeof(line), "NDL resource released: %s", type ? type : "?");
+    log_line(line);
+}
+
 /* NDL DirectMedia v2 reports LOADCOMPLETED (0x16) and PLAYING (0x1a)
  * asynchronously. Do not feed access units before LOADCOMPLETED. */
 static volatile int g_load_completed = 0;
@@ -193,7 +199,7 @@ int main(int argc, char **argv) {
 
     const char *app_id = getenv("APPID");
     if (!app_id) app_id = "com.syntropy.drivemediaprobe";
-    if (NDL_DirectMediaInit(app_id) != 0) {
+    if (NDL_DirectMediaInit(app_id, resource_released) != 0) {
         char line[512];
         snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
         log_line(line);
