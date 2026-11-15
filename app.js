@@ -403,10 +403,11 @@
     setPlaybackMessage("Este teste abre o player nativo da TV. No computador, use os botões de abrir origem ou diagnosticar Worker; o navegador pode não reproduzir MKV.");
   }
 
-  function play(index) {
+  async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
     const preview = document.getElementById("drive-preview");
+    const isTvMkv = !!window.PalmSystem && /\\.mkv$/i.test(file.name || "");
     if (!preview) {
       setMessage("O visualizador do Google Drive não foi encontrado.");
       return;
@@ -414,17 +415,32 @@
     preview.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
-    // Cria uma etapa no histórico da página. No webOS, o botão físico
-    // Voltar navega uma etapa e dispara popstate, inclusive com o iframe focado.
     if (!playerHistoryActive) {
       history.pushState({ drivePlayer: true }, "", "#player");
       playerHistoryActive = true;
     }
 
+    if (isTvMkv && typeof window.playMkvOnTv === "function") {
+      preview.classList.add("hidden");
+      video.classList.remove("hidden");
+      video.controls = true;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      setPlaybackMessage("Preparando conversão experimental na própria TV…");
+      try {
+        await loadSubtitle(file);
+        await window.playMkvOnTv(file, videoSourceUrl(file));
+      } catch (error) {
+        console.error("Conversão experimental na TV falhou:", error);
+        setPlaybackMessage("Não foi possível converter este MKV na TV: " + (error.message || error));
+      }
+      return;
+    }
+
+    if (video) video.classList.add("hidden");
+    preview.classList.remove("hidden");
     preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
-    // No navegador comum, focar o iframe facilita a navegação do player.
-    // No IPK webOS, esse foco ativa uma segunda camada nativa de controles
-    // sobre a interface do Google. Mantemos o foco fora do iframe na TV.
     if (!window.PalmSystem) preview.focus();
   }
 
@@ -433,7 +449,16 @@
     if (preview) {
       preview.src = "about:blank";
       preview.removeAttribute("src");
+      preview.classList.remove("hidden");
     }
+    if (video) {
+      video.pause();
+      if (window.stopTvTranscode) window.stopTvTranscode();
+      video.removeAttribute("src");
+      video.load();
+      video.classList.add("hidden");
+    }
+    clearSubtitle();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
     const selected = Number(preview?.dataset.index);
