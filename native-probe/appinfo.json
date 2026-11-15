@@ -1,0 +1,10 @@
+{
+  "id": "com.syntropy.drivetvprobe",
+  "version": "0.1.0",
+  "vendor": "Syntropy Digital",
+  "type": "native",
+  "main": "drive-tv-native-probe",
+  "title": "Drive TV Native Probe",
+  "icon": "icon.png",
+  "appDescription": "Teste isolado de execução nativa ARM no webOS."
+}
