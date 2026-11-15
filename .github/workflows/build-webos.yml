@@ -10,6 +10,7 @@ on:
       - "styles.css"
       - "config.js"
       - "webos-app/**"
+      - "native-probe/**"
       - ".github/workflows/build-webos.yml"
 
 permissions:
@@ -50,17 +51,59 @@ jobs:
           image.resize((130, 130)).save("build/webos-app/largeicon.png")
           PY
 
-      - name: Package IPK
+      - name: Build native ARM probe
         run: |
-          mkdir -p dist
-          ares-config --profile tv
-          ares-package --no-minify --outdir dist ./build/webos-app
-          test -n "$(find dist -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config
+          SDK_ARCHIVE="$RUNNER_TEMP/webos-native-sdk.tar.gz"
+          SDK_URL="https://github.com/openlgtv/buildroot-nc4/releases/download/2026.08-webos/arm-webos-linux-gnueabi_sdk-buildroot-x86_64.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 "$SDK_URL" -o "$SDK_ARCHIVE"
+          echo "2230a6351e5cce6fcb9d4fdcb4697335f223995401ef969c81744aaeb14c5344  $SDK_ARCHIVE" | sha256sum -c -
+          tar -xzf "$SDK_ARCHIVE" -C "$RUNNER_TEMP"
+          SDK="$RUNNER_TEMP/arm-webos-linux-gnueabi_sdk-buildroot"
+          "$SDK/relocate-sdk.sh"
+          source "$SDK/environment-setup"
+          echo "Target SDL2: $(pkg-config --modversion sdl2)"
+          cmake -S native-probe -B build/native-probe \
+            -DCMAKE_TOOLCHAIN_FILE="$SDK/share/buildroot/toolchainfile.cmake" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/native-probe --parallel 2
+          mkdir -p build/native-probe/package
+          cp native-probe/appinfo.json build/native-probe/package/
+          cp build/native-probe/drive-tv-native-probe build/native-probe/package/
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          image = Image.new("RGB", (80, 80), "#08090d")
+          draw = ImageDraw.Draw(image)
+          draw.rounded_rectangle((4, 4, 76, 76), radius=16, fill="#8b5cf6")
+          draw.rectangle((22, 22, 58, 58), outline="#ffffff", width=5)
+          draw.line((30, 40, 38, 48, 52, 31), fill="#ffffff", width=5)
+          image.save("build/native-probe/package/icon.png")
+          PY
+          file build/native-probe/package/drive-tv-native-probe
+          readelf -h build/native-probe/package/drive-tv-native-probe | grep -E 'Class:|Machine:'
 
-      - name: Upload webOS package
+      - name: Package IPKs
+        run: |
+          mkdir -p dist/web-app dist/native-probe
+          ares-config --profile tv
+          ares-package --no-minify --outdir dist/web-app ./build/webos-app
+          ares-package --no-minify --outdir dist/native-probe ./build/native-probe/package
+          test -n "$(find dist/web-app -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+          test -n "$(find dist/native-probe -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+
+      - name: Upload webOS player package
         uses: actions/upload-artifact@v4
         with:
           name: drive-tv-player-webos-ipk
-          path: dist/*.ipk
+          path: dist/web-app/*.ipk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native ARM probe package
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-tv-native-probe-ipk
+          path: dist/native-probe/*.ipk
           if-no-files-found: error
           retention-days: 14
