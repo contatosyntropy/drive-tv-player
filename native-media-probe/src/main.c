@@ -40,17 +40,18 @@ static void log_line(const char *message) {
     fprintf(stderr, "%s\n", message);
 }
 
-static void resource_released(const char *type) {
-    char line[256];
-    snprintf(line, sizeof(line), "NDL resource released: %s", type ? type : "?");
-    log_line(line);
-}
+/* NDL DirectMedia v2 reports LOADCOMPLETED (0x16) and PLAYING (0x1a)
+ * asynchronously. Do not feed access units before LOADCOMPLETED. */
+static volatile int g_load_completed = 0;
+static volatile int g_playing = 0;
 
 static void media_callback(int type, long long number, const char *value) {
     char line[256];
     snprintf(line, sizeof(line), "NDL event type=%d value=%lld %s",
              type, number, value ? value : "");
     log_line(line);
+    if (type == 0x16) g_load_completed = 1;
+    if (type == 0x1a) g_playing = 1;
 }
 
 static int64_t monotonic_ns(void) {
@@ -192,7 +193,7 @@ int main(int argc, char **argv) {
 
     const char *app_id = getenv("APPID");
     if (!app_id) app_id = "com.syntropy.drivemediaprobe";
-    if (NDL_DirectMediaInit(app_id, resource_released) != 0) {
+    if (NDL_DirectMediaInit(app_id) != 0) {
         char line[512];
         snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
         log_line(line);
@@ -261,8 +262,65 @@ int main(int argc, char **argv) {
         munmap(mapping, reader.size);
         return 10;
     }
-    NDL_DirectVideoSetArea(0, 0, mode.w, mode.h);
-    log_line("NDL LOAD OK - feeding H.264 test pattern to TV hardware decoder");
+    if (NDL_DirectVideoSetArea(0, 0, mode.w, mode.h) != 0) {
+        log_line("NDL_DirectVideoSetArea failed");
+        failed_cleanup:
+        NDL_DirectMediaUnload();
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        NDL_DirectMediaQuit();
+        SDL_Quit();
+        munmap(mapping, reader.size);
+        return 11;
+    }
+    log_line("NDL LOAD REQUESTED - waiting for asynchronous LOADCOMPLETED event");
+
+    /* Keep the native app alive and pump SDL while the TV's media pipeline loads. */
+    int64_t load_deadline = monotonic_ns() + 12000000000LL;
+    while (!g_load_completed && monotonic_ns() < load_deadline) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT ||
+                (event.type == SDL_KEYDOWN &&
+                 (event.key.keysym.sym == SDLK_ESCAPE ||
+                  event.key.keysym.sym == SDLK_BACKSPACE))) {
+                NDL_DirectMediaUnload();
+                SDL_DestroyRenderer(renderer);
+                SDL_DestroyWindow(window);
+                NDL_DirectMediaQuit();
+                SDL_Quit();
+                munmap(mapping, reader.size);
+                return 0;
+            }
+        }
+        SDL_Delay(20);
+    }
+    if (!g_load_completed) {
+        log_line("TIMEOUT: NDL did not report LOADCOMPLETED within 12 seconds");
+        /* Do not close immediately: leave the app alive for log inspection. */
+        int64_t diagnostic_until = monotonic_ns() + 30000000000LL;
+        while (monotonic_ns() < diagnostic_until) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_QUIT ||
+                    (event.type == SDL_KEYDOWN &&
+                     (event.key.keysym.sym == SDLK_ESCAPE ||
+                      event.key.keysym.sym == SDLK_BACKSPACE))) {
+                    diagnostic_until = 0;
+                }
+            }
+            if (diagnostic_until == 0) break;
+            SDL_Delay(30);
+        }
+        NDL_DirectMediaUnload();
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        NDL_DirectMediaQuit();
+        SDL_Quit();
+        munmap(mapping, reader.size);
+        return 12;
+    }
+    log_line("NDL LOADCOMPLETED - feeding H.264 test pattern to TV hardware decoder");
 
     const uint8_t *unit = NULL;
     size_t unit_size = 0;
