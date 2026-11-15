@@ -1,0 +1,136 @@
+/*
+ * Experimental on-device MKV audio conversion for LG webOS 6.
+ * FFmpeg runs in a Web Worker on the TV. The source is exposed as an
+ * Emscripten lazy file so FFmpeg can request byte ranges instead of
+ * downloading the entire MKV before starting.
+ *
+ * Test scope: first 120 seconds only. HLS output is held in browser memory.
+ */
+(() => {
+  const video = document.getElementById("video");
+  const CORE_JS = "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js";
+  const MAX_TEST_SECONDS = 120;
+  let ffmpeg = null;
+  let hls = null;
+  let objectUrls = [];
+  let running = false;
+
+  function message(text) {
+    let node = document.getElementById("playback-message");
+    if (!node && video) {
+      node = document.createElement("p");
+      node.id = "playback-message";
+      node.className = "message";
+      video.insertAdjacentElement("afterend", node);
+    }
+    if (node) node.textContent = text;
+  }
+
+  function releaseOutput() {
+    if (hls) {
+      hls.destroy();
+      hls = null;
+    }
+    objectUrls.forEach(url => URL.revokeObjectURL(url));
+    objectUrls = [];
+  }
+
+  async function getFFmpeg() {
+    if (ffmpeg) return ffmpeg;
+    if (!window.FFmpeg || !window.FFmpeg.createFFmpeg) {
+      throw new Error("Biblioteca FFmpeg.wasm não carregou. Verifique a conexão da TV.");
+    }
+    message("Carregando o motor FFmpeg na TV (primeira execução pode demorar)…");
+    ffmpeg = window.FFmpeg.createFFmpeg({
+      corePath: CORE_JS,
+      log: true,
+      progress: ({ ratio }) => {
+        if (Number.isFinite(ratio)) {
+          message("Convertendo na TV: " + Math.max(0, Math.min(100, Math.round(ratio * 100))) + "% (amostra de 2 minutos)");
+        }
+      }
+    });
+    await ffmpeg.load();
+    return ffmpeg;
+  }
+
+  async function playMkvOnTv(file, sourceUrl) {
+    if (running) throw new Error("Já existe uma conversão em andamento.");
+    running = true;
+    releaseOutput();
+    try {
+      message("Iniciando FFmpeg no hardware da TV. O arquivo original permanece no Google Drive.");
+      const engine = await getFFmpeg();
+
+      try { engine.FS("unlink", "/input.mkv"); } catch (_) {}
+      try {
+        // Emscripten performs ranged XHR from the FFmpeg worker on demand.
+        engine.FS("createLazyFile", "/", "input.mkv", sourceUrl, true, false);
+      } catch (error) {
+        throw new Error("A compilação FFmpeg não disponibilizou leitura HTTP por partes (createLazyFile): " + error.message);
+      }
+
+      message("Lendo o MKV por HTTP Range e convertendo o áudio para AAC…");
+      await engine.run(
+        "-i", "/input.mkv",
+        "-t", String(MAX_TEST_SECONDS),
+        "-map", "0:v:0",
+        "-map", "0:a:0?",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ac", "2",
+        "-f", "hls",
+        "-hls_time", "15",
+        "-hls_playlist_type", "vod",
+        "-hls_segment_filename", "/segment_%03d.ts",
+        "/index.m3u8"
+      );
+
+      let playlist = new TextDecoder("utf-8").decode(engine.FS("readFile", "/index.m3u8"));
+      const names = engine.FS("readdir", "/").filter(name => /^segment_\d+\.ts$/.test(name)).sort();
+      if (!names.length) throw new Error("O FFmpeg terminou sem gerar segmentos HLS.");
+      const urlsByName = {};
+      names.forEach(name => {
+        const bytes = engine.FS("readFile", "/" + name);
+        const url = URL.createObjectURL(new Blob([bytes], { type: "video/mp2t" }));
+        objectUrls.push(url);
+        urlsByName[name] = url;
+      });
+      playlist = playlist.split(/\r?\n/).map(line => urlsByName[line] || line).join("\n");
+      const playlistUrl = URL.createObjectURL(new Blob([playlist], { type: "application/vnd.apple.mpegurl" }));
+      objectUrls.push(playlistUrl);
+
+      video.classList.remove("hidden");
+      video.controls = true;
+      if (window.Hls && window.Hls.isSupported()) {
+        hls = new window.Hls({ enableWorker: false, maxBufferLength: 30 });
+        hls.loadSource(playlistUrl);
+        hls.attachMedia(video);
+        hls.on(window.Hls.Events.ERROR, (_event, data) => {
+          if (data && data.fatal) message("Erro do player HLS: " + data.details);
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = playlistUrl;
+      } else {
+        throw new Error("Este webOS não reconheceu HLS no elemento de vídeo.");
+      }
+      video.play().catch(error => message("Conversão concluída. Pressione Play no controle da TV. " + error.message));
+      message("Conversão concluída na TV. Esta versão reproduz somente os primeiros 120 segundos para validar o processamento local.");
+    } finally {
+      running = false;
+    }
+  }
+
+  function stopTvTranscode() {
+    releaseOutput();
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+  }
+
+  window.playMkvOnTv = playMkvOnTv;
+  window.stopTvTranscode = stopTvTranscode;
+})();
