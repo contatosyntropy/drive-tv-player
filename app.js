@@ -15,6 +15,7 @@
   let visibleVideos = [];
   let subtitleUrl = null;
   let subtitleLoadToken = 0;
+  let playerHistoryActive = false;
 
   const formatSize = bytes => {
     if (!bytes) return "";
@@ -414,14 +415,19 @@
     preview.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
-    preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
+    // Cria uma etapa no histórico da página. No webOS, o botão físico
+    // Voltar navega uma etapa e dispara popstate, inclusive com o iframe focado.
+    if (!playerHistoryActive) {
+      history.pushState({ drivePlayer: true }, "", "#player");
+      playerHistoryActive = true;
+    }
 
-    // Mantém o foco no app, não dentro do iframe cross-origin. Assim a tecla
-    // Back do controle LG continua chegando ao listener desta página.
-    closeButton?.focus();
+    preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
+    // O foco no iframe permite controlar o player oficial do Google pelo controle.
+    preview.focus();
   }
 
-  function closePlayer() {
+  function closePlayer(fromHistory = false) {
     const preview = document.getElementById("drive-preview");
     if (preview) {
       preview.src = "about:blank";
@@ -432,26 +438,22 @@
     const selected = Number(preview?.dataset.index);
     const cards = grid.querySelectorAll(".video-card");
     if (Number.isInteger(selected) && cards[selected]) cards[selected].focus();
+
+    // Ao clicar no botão visível, remove também a entrada criada para o player.
+    if (!fromHistory && playerHistoryActive) {
+      playerHistoryActive = false;
+      history.back();
+    } else if (fromHistory) {
+      playerHistoryActive = false;
+    }
   }
 
-  document.getElementById("close-player")?.addEventListener("click", closePlayer);
+  document.getElementById("close-player")?.addEventListener("click", () => closePlayer());
 
-  function handleRemoteBack(event) {
-    if (player.classList.contains("hidden")) return;
-    const isBack = event.key === "Escape" ||
-      event.key === "Backspace" ||
-      event.key === "GoBack" ||
-      event.key === "BrowserBack" ||
-      event.keyCode === 461;
-    if (!isBack) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-    closePlayer();
-  }
-
-  // Capture antecipado para interceptar o botão físico Voltar do Magic Remote.
-  window.addEventListener("keydown", handleRemoteBack, true);
+  // O webOS TV gerencia o botão Back pelo histórico do navegador e emite popstate.
+  window.addEventListener("popstate", () => {
+    if (playerHistoryActive) closePlayer(true);
+  });
 
   document.getElementById("refresh").addEventListener("click", loadLibrary);
   function setPlaybackMessage(text) {
