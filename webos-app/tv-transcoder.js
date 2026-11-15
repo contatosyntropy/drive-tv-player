@@ -8,7 +8,7 @@
  */
 (() => {
   const video = document.getElementById("video");
-  const CORE_JS = "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js";
+  const CORE_JS = "https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js";
   const MAX_TEST_SECONDS = 120;
   let ffmpeg = null;
   let hls = null;
@@ -43,6 +43,7 @@
     message("Carregando o motor FFmpeg na TV (primeira execução pode demorar)…");
     ffmpeg = window.FFmpeg.createFFmpeg({
       corePath: CORE_JS,
+      mainName: "main",
       log: true,
       progress: ({ ratio }) => {
         if (Number.isFinite(ratio)) {
@@ -50,7 +51,12 @@
         }
       }
     });
-    await ffmpeg.load();
+    try {
+      await ffmpeg.load();
+    } catch (error) {
+      const detail = error && error.message ? error.message : String(error);
+      throw new Error("A TV não conseguiu reservar memória para iniciar o FFmpeg WebAssembly (modo de uma thread). Detalhe: " + detail);
+    }
     return ffmpeg;
   }
 
@@ -70,6 +76,9 @@
         throw new Error("A compilação FFmpeg não disponibilizou leitura HTTP por partes (createLazyFile): " + error.message);
       }
 
+      if (Number(file.size) > 2000000000) {
+        throw new Error("Este arquivo tem " + (Number(file.size) / 1000000000).toFixed(2) + " GB. O FFmpeg.wasm 0.11 tem limite documentado de entrada de 2 GB; este teste não consegue processá-lo por completo.");
+      }
       message("Lendo o MKV por HTTP Range e convertendo o áudio para AAC…");
       await engine.run(
         "-i", "/input.mkv",
