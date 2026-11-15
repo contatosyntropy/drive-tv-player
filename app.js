@@ -407,7 +407,7 @@
     const file = visibleVideos[index];
     if (!file) return;
     const preview = document.getElementById("drive-preview");
-    const isTvMkv = !!window.PalmSystem && /\\.mkv$/i.test(file.name || "");
+    const isTvMkv = !!window.PalmSystem && /\.mkv$/i.test(file.name || "");
     if (!preview) {
       setMessage("O visualizador do Google Drive não foi encontrado.");
       return;
