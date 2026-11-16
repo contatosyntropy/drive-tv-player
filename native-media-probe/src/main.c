@@ -343,6 +343,8 @@ int main(int argc, char **argv) {
         return 4;
     }
 
+    int ndl_init_rc = -1; /* NDL is initialized only after the SDL window is ready. */
+
     /* Match the hardware-verified webosbrew sample sequence:
      * SDL preinit -> fullscreen SDL window -> transparent present -> NDL init.
      * The video decoder owns a plane behind this SDL surface. */
@@ -391,7 +393,7 @@ int main(int argc, char **argv) {
     const char *app_id = getenv("APPID");
     if (!app_id) app_id = "com.syntropy.drivemediaprobe";
     log_line("STAGE 3: SDL window ready; initializing NDL DirectMedia");
-    int ndl_init_rc = NDL_DirectMediaInit(app_id, resource_released);
+    ndl_init_rc = NDL_DirectMediaInit(app_id, resource_released);
     if (ndl_init_rc != 0) {
         char line[512];
         snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
