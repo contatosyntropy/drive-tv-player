@@ -157,7 +157,9 @@ jobs:
         shell: pwsh
         run: |
           $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-essentials.zip"
-          Invoke-WebRequest "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $archive
+          $download = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
+          curl.exe -fL --retry 5 --retry-all-errors --connect-timeout 30 $download -o $archive
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download the FFmpeg Windows package." }
           Expand-Archive -Path $archive -DestinationPath "$env:RUNNER_TEMP/ffmpeg" -Force
           $bin = Get-ChildItem "$env:RUNNER_TEMP/ffmpeg" -Directory | Select-Object -First 1
           if (!$bin) { throw "FFmpeg archive did not contain its expected directory." }
@@ -165,6 +167,7 @@ jobs:
           Copy-Item "$($bin.FullName)/bin/ffmpeg.exe" "dist/desktop-test-kit/bin/"
           Copy-Item "$($bin.FullName)/bin/ffprobe.exe" "dist/desktop-test-kit/bin/"
           Copy-Item "$($bin.FullName)/bin/ffplay.exe" "dist/desktop-test-kit/bin/"
+          if (Test-Path "$($bin.FullName)/LICENSE.txt") { Copy-Item "$($bin.FullName)/LICENSE.txt" "dist/desktop-test-kit/" }
           Copy-Item "desktop-probe/Run-DriveTV-Test.ps1" "dist/desktop-test-kit/"
           Copy-Item "desktop-probe/Run-DriveTV-Test.bat" "dist/desktop-test-kit/"
           Copy-Item "desktop-probe/README.md" "dist/desktop-test-kit/"
