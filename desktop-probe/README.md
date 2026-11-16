@@ -5,7 +5,8 @@ Este pacote permite testar, no Windows, a entrega do vídeo pelo Worker e a leit
 ## Como usar
 
 1. Extraia o ZIP em uma pasta.
-2. Execute `Run-DriveTV-Test.bat`.
+2. Execute `Run-DriveTV-Test.bat`. A janela permanecerá aberta ao final.
+3. O resultado completo também será salvo em `diagnostico-drive-tv.txt`, na mesma pasta.
 3. Cole a URL completa do endpoint `/api/video/{ID}/{NOME}`; ou pressione Enter e informe ID, nome do arquivo e chave da API nos campos solicitados.
 4. O teste faz requisições HTTP Range em diferentes posições do arquivo.
 5. O FFprobe identifica contêiner, codecs, resolução, duração e áudio.
