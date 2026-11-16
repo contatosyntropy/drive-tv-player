@@ -3,7 +3,7 @@
  * API flow follows the public webosbrew/samples NDL DirectMedia example:
  * https://github.com/webosbrew/samples/tree/main/media/ndl/directmedia
  *
- * This probe intentionally tests H.264 video only. It does not touch the web player,
+ * This probe intentionally tests HEVC video only. It does not touch the web player,
  * Google Drive, audio, subtitles, or the existing Native Probe.
  */
 #define NDL_DIRECTMEDIA_API_VERSION 2
@@ -23,9 +23,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VIDEO_WIDTH 1280
-#define VIDEO_HEIGHT 720
-#define VIDEO_FPS 24
+#define VIDEO_WIDTH 1920
+#define VIDEO_HEIGHT 960
+#define VIDEO_FPS_NUM 24000
+#define VIDEO_FPS_DEN 1001
 #define MAX_FEED_RETRIES 200
 #define FEED_BACKOFF_NS 5000000LL
 
@@ -340,7 +341,7 @@ typedef struct {
     const uint8_t *data;
     size_t size;
     size_t pos;
-} h264_reader;
+} hevc_reader;
 
 static size_t find_start_code(const uint8_t *data, size_t size, size_t from, int *length) {
     for (size_t i = from; i + 3 <= size; ++i) {
@@ -358,8 +359,10 @@ static size_t find_start_code(const uint8_t *data, size_t size, size_t from, int
     return size;
 }
 
-/* The CI-generated stream has one slice per picture and no B-frames. */
-static int next_access_unit(h264_reader *reader, const uint8_t **out, size_t *out_size,
+/* sample.hevc is Annex-B HEVC with AUD NALs inserted by FFmpeg.
+ * HEVC nal_unit_type is bits 1..6 of the first NAL header byte.
+ * AUD (35) starts the next access unit; VCL NALs are types 0..31. */
+static int next_access_unit(hevc_reader *reader, const uint8_t **out, size_t *out_size,
                             int64_t *pts_ns, long frame_index) {
     int code_len = 0;
     size_t unit_start = find_start_code(reader->data, reader->size, reader->pos, &code_len);
@@ -372,30 +375,28 @@ static int next_access_unit(h264_reader *reader, const uint8_t **out, size_t *ou
     int have_vcl = 0;
     while (nal_start < reader->size) {
         size_t header = nal_start + (size_t)code_len;
-        if (header >= reader->size) break;
-        int nal_type = reader->data[header] & 0x1f;
+        if (header + 1 >= reader->size) break;
+        int nal_type = (reader->data[header] >> 1) & 0x3f;
 
-        /* AUD marks the beginning of the next access unit. Keep it for the
-         * next call, but return the complete previous picture first. */
-        if (nal_type == 9 && nal_start > unit_start && have_vcl) {
+        if (nal_type == 35 && nal_start > unit_start && have_vcl) {
             *out = reader->data + unit_start;
             *out_size = nal_start - unit_start;
-            *pts_ns = (int64_t)frame_index * 1000000000LL / VIDEO_FPS;
+            *pts_ns = (int64_t)frame_index * VIDEO_FPS_DEN * 1000000000LL / VIDEO_FPS_NUM;
             reader->pos = nal_start;
             return *out_size > 0;
         }
 
-        if (nal_type >= 1 && nal_type <= 5) have_vcl = 1;
+        if (nal_type <= 31) have_vcl = 1;
 
         int next_len = 0;
         size_t next = find_start_code(reader->data, reader->size,
-                                      header + 1, &next_len);
+                                      header + 2, &next_len);
         if (next >= reader->size || next_len == 0) {
             reader->pos = reader->size;
             if (!have_vcl) return 0;
             *out = reader->data + unit_start;
             *out_size = reader->size - unit_start;
-            *pts_ns = (int64_t)frame_index * 1000000000LL / VIDEO_FPS;
+            *pts_ns = (int64_t)frame_index * VIDEO_FPS_DEN * 1000000000LL / VIDEO_FPS_NUM;
             return *out_size > 0;
         }
         nal_start = next;
@@ -406,17 +407,17 @@ static int next_access_unit(h264_reader *reader, const uint8_t **out, size_t *ou
     return 0;
 }
 
-static int load_sample(const char *path, h264_reader *reader, void **mapping) {
+static int load_sample(const char *path, hevc_reader *reader, void **mapping) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
         char line[512];
-        snprintf(line, sizeof(line), "Cannot open sample.h264: %s", strerror(errno));
+        snprintf(line, sizeof(line), "Cannot open sample.hevc: %s", strerror(errno));
         log_line(line);
         return 0;
     }
     struct stat st;
     if (fstat(fd, &st) != 0 || st.st_size <= 0) {
-        log_line("sample.h264 is empty or cannot be inspected");
+        log_line("sample.hevc is empty or cannot be inspected");
         close(fd);
         return 0;
     }
@@ -437,7 +438,7 @@ static int load_sample(const char *path, h264_reader *reader, void **mapping) {
         snprintf(hex + i * 3, sizeof(hex) - i * 3, "%02X ", reader->data[i]);
     }
     snprintf(diagnostic, sizeof(diagnostic),
-             "Loaded sample.h264: path=%s size=%lu bytes first_bytes=%s",
+             "Loaded sample.hevc: path=%s size=%lu bytes first_bytes=%s",
              path, (unsigned long)reader->size, hex);
     log_line(diagnostic);
     return 1;
@@ -478,9 +479,9 @@ int main(int argc, char **argv) {
     executable[exe_len] = '\0';
     char *slash = strrchr(executable, '/');
     if (!slash) return 2;
-    strcpy(slash + 1, "sample.h264");
+    strcpy(slash + 1, "sample.hevc");
 
-    h264_reader reader;
+    hevc_reader reader;
     void *mapping = NULL;
     if (!load_sample(executable, &reader, &mapping)) return 3;
 
@@ -567,7 +568,7 @@ int main(int argc, char **argv) {
         .video = {
             .width = VIDEO_WIDTH,
             .height = VIDEO_HEIGHT,
-            .type = NDL_VIDEO_TYPE_H264
+            .type = NDL_VIDEO_TYPE_H265
         },
         /* DirectMedia v2 expects the PCM audio descriptor to be initialized
          * even for a video-only stream. Keep type=0 to disable audio, but
@@ -658,14 +659,14 @@ int main(int argc, char **argv) {
 
     if (frames > 0 && !failed) {
         char line[256];
-        snprintf(line, sizeof(line), "NDL VIDEO FEED OK - %ld H.264 frames submitted", frames);
+        snprintf(line, sizeof(line), "NDL VIDEO FEED OK - %ld HEVC frames submitted", frames);
         log_line(line);
         log_line(g_load_completed ? "NDL LOADCOMPLETED observed during feed" :
                                    "NDL LOADCOMPLETED not observed during feed");
         log_line(g_playing ? "NDL PLAYING event observed during feed" :
                              "NDL PLAYING event NOT observed during feed");
     } else if (!failed) {
-        log_line("No H.264 access units were parsed from sample.h264");
+        log_line("No HEVC access units were parsed from sample.hevc");
         failed = 1;
     }
 
