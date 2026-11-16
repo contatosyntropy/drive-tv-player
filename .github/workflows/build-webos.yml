@@ -12,6 +12,7 @@ on:
       - "webos-app/**"
       - "native-probe/**"
       - "native-media-probe/**"
+      - "desktop-probe/**"
       - ".github/workflows/build-webos.yml"
 
 permissions:
@@ -143,5 +144,36 @@ jobs:
         with:
           name: drive-tv-native-media-probe-ipk
           path: dist/native-media-probe/*.ipk
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop-test-kit:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download FFmpeg Windows Essentials
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-essentials.zip"
+          Invoke-WebRequest "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath "$env:RUNNER_TEMP/ffmpeg" -Force
+          $bin = Get-ChildItem "$env:RUNNER_TEMP/ffmpeg" -Directory | Select-Object -First 1
+          if (!$bin) { throw "FFmpeg archive did not contain its expected directory." }
+          New-Item -ItemType Directory -Force -Path "dist/desktop-test-kit/bin" | Out-Null
+          Copy-Item "$($bin.FullName)/bin/ffmpeg.exe" "dist/desktop-test-kit/bin/"
+          Copy-Item "$($bin.FullName)/bin/ffprobe.exe" "dist/desktop-test-kit/bin/"
+          Copy-Item "$($bin.FullName)/bin/ffplay.exe" "dist/desktop-test-kit/bin/"
+          Copy-Item "desktop-probe/Run-DriveTV-Test.ps1" "dist/desktop-test-kit/"
+          Copy-Item "desktop-probe/Run-DriveTV-Test.bat" "dist/desktop-test-kit/"
+          Copy-Item "desktop-probe/README.md" "dist/desktop-test-kit/"
+          Compress-Archive -Path "dist/desktop-test-kit/*" -DestinationPath "dist/drive-tv-desktop-test-kit-windows.zip" -Force
+
+      - name: Upload Windows desktop test kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-tv-desktop-test-kit-windows
+          path: dist/drive-tv-desktop-test-kit-windows.zip
           if-no-files-found: error
           retention-days: 14
