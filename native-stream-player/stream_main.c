@@ -310,9 +310,14 @@ int main(void){
     char meta[256];snprintf(meta,sizeof(meta),"MKV opened: %dx%d profile=%d time_base=%d/%d duration=%lld",
       st->codecpar->width,st->codecpar->height,st->codecpar->profile,st->time_base.num,st->time_base.den,
       (long long)fmt->duration);log_line(meta);
-    const AVBitStreamFilter *filter=av_bsf_get_by_name("hevc_mp4toannexb");AVBSFContext *bsf=NULL;
-    if(!filter||av_bsf_alloc(filter,&bsf)<0){log_line("Cannot allocate HEVC Annex-B bitstream filter");goto fail_early;}
-    if(avcodec_parameters_copy(bsf->par_in,st->codecpar)<0||av_bsf_init(bsf)<0){log_line("Cannot initialize HEVC Annex-B filter");av_bsf_free(&bsf);goto fail_early;}
+    AVBSFContext *bsf=NULL;
+    /* Match the proven TV probe: Annex-B conversion plus an AUD before each access unit. */
+    rc=av_bsf_list_parse_str("hevc_mp4toannexb,hevc_metadata=aud=insert",&bsf);
+    if(rc<0||!bsf){log_line("Cannot create HEVC Annex-B + AUD bitstream filter chain");goto fail_early;}
+    if(avcodec_parameters_copy(bsf->par_in,st->codecpar)<0){log_line("Cannot copy HEVC codec parameters into bitstream filter chain");av_bsf_free(&bsf);goto fail_early;}
+    bsf->time_base_in=st->time_base;
+    if(av_bsf_init(bsf)<0){log_line("Cannot initialize HEVC Annex-B + AUD filter chain");av_bsf_free(&bsf);goto fail_early;}
+    log_line("HEVC filter chain enabled: Annex-B conversion + AUD insertion");
 
     setenv("EGL_PLATFORM","wayland",0);setenv("XDG_RUNTIME_DIR","/tmp/xdg",0);
     if(SDL_Init(0)!=0||SDL_InitSubSystem(SDL_INIT_VIDEO)!=0){log_line(SDL_GetError());av_bsf_free(&bsf);goto fail_early;}
