@@ -31,6 +31,25 @@ static int64_t g_feed_call_max_ns = 0;
 static long g_feed_calls = 0;
 static long g_feed_retries = 0;
 
+/* Main-thread diagnostics: AVIO latency and frame-timestamp pacing. */
+static int64_t g_avio_read_total_ns = 0;
+static int64_t g_avio_read_max_ns = 0;
+static long g_avio_read_calls = 0;
+static long g_avio_read_bytes = 0;
+static int64_t g_diag_last_dts_us = AV_NOPTS_VALUE;
+static int64_t g_diag_dts_delta_sum_us = 0;
+static int64_t g_diag_dts_delta_min_us = INT64_MAX;
+static int64_t g_diag_dts_delta_max_us = 0;
+static int64_t g_diag_pts_offset_sum_us = 0;
+static int64_t g_diag_pts_offset_min_us = INT64_MAX;
+static int64_t g_diag_pts_offset_max_us = INT64_MIN;
+static int64_t g_diag_wait_total_ns = 0;
+static int64_t g_diag_wait_max_ns = 0;
+static int64_t g_diag_late_total_ns = 0;
+static int64_t g_diag_late_max_ns = 0;
+static int64_t g_diag_duration_sum_us = 0;
+static long g_diag_timed_frames = 0;
+
 static void log_line(const char *s) {
     const char *home = getenv("HOME");
     char path[512];
@@ -209,7 +228,7 @@ static void range_reader_stop(RangeReader *r){
     free(r->cache);free(r->next_cache);
     if(r->sync_ready){pthread_cond_destroy(&r->cond);pthread_mutex_destroy(&r->mutex);}
 }
-static int avio_read_packet(void *opaque,uint8_t *buf,int buf_size){
+static int avio_read_packet_impl(void *opaque,uint8_t *buf,int buf_size){
     RangeReader *r=opaque;if(buf_size<=0)return 0;
     pthread_mutex_lock(&r->mutex);
     for(;;){
@@ -241,6 +260,16 @@ static int avio_read_packet(void *opaque,uint8_t *buf,int buf_size){
     memcpy(buf,r->cache+offset,n);r->position+=(int64_t)n;
     pthread_mutex_unlock(&r->mutex);return (int)n;
 }
+static int avio_read_packet(void *opaque,uint8_t *buf,int buf_size){
+    int64_t started=monotonic_ns();
+    int rc=avio_read_packet_impl(opaque,buf,buf_size);
+    int64_t elapsed=monotonic_ns()-started;
+    g_avio_read_total_ns+=elapsed;
+    if(elapsed>g_avio_read_max_ns)g_avio_read_max_ns=elapsed;
+    g_avio_read_calls++;
+    if(rc>0)g_avio_read_bytes+=rc;
+    return rc;
+}
 static int64_t range_seek_cb(void *opaque,int64_t offset,int whence){
     RangeReader *r=opaque;pthread_mutex_lock(&r->mutex);
     if(whence==AVSEEK_SIZE){int64_t z=r->file_size;pthread_mutex_unlock(&r->mutex);return z>0?z:AVERROR(ENOSYS);}
@@ -261,11 +290,35 @@ static int64_t monotonic_ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONI
 static void sleep_ns(int64_t ns){if(ns<=0)return;struct timespec t={(time_t)(ns/1000000000LL),(long)(ns%1000000000LL)};while(nanosleep(&t,&t)&&errno==EINTR){}}
 static void wait_until(int64_t target){int64_t now=monotonic_ns();if(target>now)sleep_ns(target-now);}
 static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t *clock_origin,int *last_rc){
-    int64_t pts=p->pts==AV_NOPTS_VALUE?0:av_rescale_q(p->pts,tb,AV_TIME_BASE_Q)-origin_us;
-    int64_t dts=p->dts==AV_NOPTS_VALUE?pts:av_rescale_q(p->dts,tb,AV_TIME_BASE_Q)-origin_us;
+    int64_t pts_abs=p->pts==AV_NOPTS_VALUE?0:av_rescale_q(p->pts,tb,AV_TIME_BASE_Q);
+    int64_t dts_abs=p->dts==AV_NOPTS_VALUE?pts_abs:av_rescale_q(p->dts,tb,AV_TIME_BASE_Q);
+    int64_t pts=pts_abs-origin_us;
+    int64_t dts=dts_abs-origin_us;
+    int64_t duration_us=p->duration>0?av_rescale_q(p->duration,tb,AV_TIME_BASE_Q):0;
     if(pts<0)pts=0;if(dts<0)dts=0;
+    if(g_diag_last_dts_us!=AV_NOPTS_VALUE){
+        int64_t delta=dts_abs-g_diag_last_dts_us;
+        if(delta>0){
+            g_diag_dts_delta_sum_us+=delta;
+            if(delta<g_diag_dts_delta_min_us)g_diag_dts_delta_min_us=delta;
+            if(delta>g_diag_dts_delta_max_us)g_diag_dts_delta_max_us=delta;
+        }
+    }
+    g_diag_last_dts_us=dts_abs;
+    int64_t pts_offset=pts_abs-dts_abs;
+    g_diag_pts_offset_sum_us+=pts_offset;
+    if(pts_offset<g_diag_pts_offset_min_us)g_diag_pts_offset_min_us=pts_offset;
+    if(pts_offset>g_diag_pts_offset_max_us)g_diag_pts_offset_max_us=pts_offset;
+    g_diag_duration_sum_us+=duration_us;
+    g_diag_timed_frames++;
     if(*clock_origin==0)*clock_origin=monotonic_ns()-dts*1000LL;
-    wait_until(*clock_origin+dts*1000LL);
+    int64_t target_ns=*clock_origin+dts*1000LL;
+    int64_t before_wait=monotonic_ns();
+    int64_t wait_ns=target_ns>before_wait?target_ns-before_wait:0;
+    int64_t late_ns=before_wait>target_ns?before_wait-target_ns:0;
+    g_diag_wait_total_ns+=wait_ns;if(wait_ns>g_diag_wait_max_ns)g_diag_wait_max_ns=wait_ns;
+    g_diag_late_total_ns+=late_ns;if(late_ns>g_diag_late_max_ns)g_diag_late_max_ns=late_ns;
+    wait_until(target_ns);
     for(int i=0;i<MAX_FEED_RETRIES;i++){
         int64_t call_start=monotonic_ns();
         int rc=NDL_DirectVideoPlay(p->data,(unsigned int)p->size,(long long)pts);
@@ -287,12 +340,33 @@ static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t *
         (*frames)++;
         if(g_feed_window_start==0)g_feed_window_start=monotonic_ns();
         g_feed_calls++;
-        if((*frames)%24==0){
+        if((*frames)%120==0){
             int64_t now=monotonic_ns();double sec=(now-g_feed_window_start)/1e9;
-            char stat[320];snprintf(stat,sizeof(stat),"PERF frames=%ld window_fps=%.2f feed_avg_ms=%.3f feed_max_ms=%.3f retries=%ld packet_bytes=%d",
-              *frames,sec>0?24.0/sec:0.0,g_feed_calls?((double)g_feed_call_total_ns/g_feed_calls)/1e6:0.0,
+            double dts_avg=g_diag_timed_frames>1?(double)g_diag_dts_delta_sum_us/(g_diag_timed_frames-1):0.0;
+            double pts_avg=g_diag_timed_frames?(double)g_diag_pts_offset_sum_us/g_diag_timed_frames:0.0;
+            double wait_avg=g_diag_timed_frames?(double)g_diag_wait_total_ns/g_diag_timed_frames/1e6:0.0;
+            double late_avg=g_diag_timed_frames?(double)g_diag_late_total_ns/g_diag_timed_frames/1e6:0.0;
+            double avio_avg=g_avio_read_calls?(double)g_avio_read_total_ns/g_avio_read_calls/1e6:0.0;
+            char stat[640];snprintf(stat,sizeof(stat),
+              "PERF frames=%ld window_fps=%.2f feed_avg_ms=%.3f feed_max_ms=%.3f retries=%ld packet_bytes=%d",
+              *frames,sec>0?120.0/sec:0.0,g_feed_calls?((double)g_feed_call_total_ns/g_feed_calls)/1e6:0.0,
               (double)g_feed_call_max_ns/1e6,g_feed_retries,out->size);
-            log_line(stat);g_feed_window_start=now;g_feed_call_total_ns=0;g_feed_call_max_ns=0;g_feed_calls=0;g_feed_retries=0;
+            log_line(stat);
+            snprintf(stat,sizeof(stat),
+              "TIMING frames=%ld dts_delta_avg_ms=%.3f dts_delta_min_ms=%.3f dts_delta_max_ms=%.3f pts_minus_dts_avg_ms=%.3f pts_min_ms=%.3f pts_max_ms=%.3f packet_duration_avg_ms=%.3f wait_avg_ms=%.3f wait_max_ms=%.3f late_avg_ms=%.3f late_max_ms=%.3f avio_read_avg_ms=%.3f avio_read_max_ms=%.3f avio_calls=%ld avio_bytes=%ld",
+              *frames,dts_avg/1000.0,g_diag_dts_delta_min_us==INT64_MAX?0.0:g_diag_dts_delta_min_us/1000.0,
+              g_diag_dts_delta_max_us/1000.0,pts_avg/1000.0,
+              g_diag_pts_offset_min_us==INT64_MAX?0.0:g_diag_pts_offset_min_us/1000.0,
+              g_diag_pts_offset_max_us==INT64_MIN?0.0:g_diag_pts_offset_max_us/1000.0,
+              g_diag_timed_frames?(double)g_diag_duration_sum_us/g_diag_timed_frames/1000.0:0.0,
+              wait_avg,g_diag_wait_max_ns/1e6,late_avg,g_diag_late_max_ns/1e6,
+              avio_avg,g_avio_read_max_ns/1e6,g_avio_read_calls,g_avio_read_bytes);
+            log_line(stat);
+            g_feed_window_start=now;g_feed_call_total_ns=0;g_feed_call_max_ns=0;g_feed_calls=0;g_feed_retries=0;
+            g_diag_last_dts_us=AV_NOPTS_VALUE;g_diag_dts_delta_sum_us=0;g_diag_dts_delta_min_us=INT64_MAX;g_diag_dts_delta_max_us=0;
+            g_diag_pts_offset_sum_us=0;g_diag_pts_offset_min_us=INT64_MAX;g_diag_pts_offset_max_us=INT64_MIN;
+            g_diag_wait_total_ns=0;g_diag_wait_max_ns=0;g_diag_late_total_ns=0;g_diag_late_max_ns=0;g_diag_duration_sum_us=0;g_diag_timed_frames=0;
+            g_avio_read_total_ns=0;g_avio_read_max_ns=0;g_avio_read_calls=0;g_avio_read_bytes=0;
         }
         av_packet_unref(out);
     }
@@ -358,7 +432,8 @@ int main(void){
     SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);SDL_RenderPresent(renderer);
     log_line("NDL load accepted; beginning continuous HEVC packet feed");
     AVPacket *packet=av_packet_alloc();int64_t origin_us=AV_NOPTS_VALUE,clock_origin=0;long frames=0;int failed=0;
-    while((rc=av_read_frame(fmt,packet))>=0){
+    int demux_rc=0;const char *stop_reason="demux-ended";
+    while((demux_rc=av_read_frame(fmt,packet))>=0){
         if(packet->stream_index==video){
             if(origin_us==AV_NOPTS_VALUE){
                 int64_t first=packet->dts!=AV_NOPTS_VALUE?packet->dts:packet->pts;
@@ -370,15 +445,17 @@ int main(void){
             if(rc<0){failed=1;av_packet_unref(packet);break;}
         }
         av_packet_unref(packet);
-        if(SDL_QuitRequested()){failed=2;break;}
+        if(SDL_QuitRequested()){failed=2;stop_reason="user-quit";break;}
     }
+    if(!failed && demux_rc<0 && demux_rc!=AVERROR_EOF){char e[256];av_strerror(demux_rc,e,sizeof(e));stop_reason="demux-error";log_line(e);}
+    else if(demux_rc==AVERROR_EOF)stop_reason="eof";
     if(!failed){
         av_bsf_send_packet(bsf,NULL);
         if(drain_bsf(bsf,st->time_base,origin_us==AV_NOPTS_VALUE?0:origin_us,&clock_origin,&frames)<0)failed=1;
     }
     av_packet_free(&packet);
-    {char s[256];snprintf(s,sizeof(s),"Stream ended: frames=%ld LOADCOMPLETED=%s PLAYING=%s read_rc=%d",
-      frames,g_load_completed?"yes":"no",g_playing?"yes":"no",rc);log_line(s);}
+    {char s[320];snprintf(s,sizeof(s),"Stream ended: frames=%ld LOADCOMPLETED=%s PLAYING=%s demux_rc=%d stop_reason=%s",
+      frames,g_load_completed?"yes":"no",g_playing?"yes":"no",demux_rc,stop_reason);log_line(s);}
     if(!frames)failed=1;
     if(failed==1 || failed==2){char id[16]={0};int up=upload_log(id,sizeof(id));char d[160];snprintf(d,sizeof(d),"Playback diagnostic uploaded=%s id=%s",up?"yes":"no",up?id:"none");log_line(d);}
     if(failed==0){
