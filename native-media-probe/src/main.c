@@ -362,37 +362,48 @@ static size_t find_start_code(const uint8_t *data, size_t size, size_t from, int
 static int next_access_unit(h264_reader *reader, const uint8_t **out, size_t *out_size,
                             int64_t *pts_ns, long frame_index) {
     int code_len = 0;
-    size_t start = find_start_code(reader->data, reader->size, reader->pos, &code_len);
-    if (start >= reader->size) return 0;
+    size_t unit_start = find_start_code(reader->data, reader->size, reader->pos, &code_len);
+    if (unit_start >= reader->size || code_len == 0) {
+        reader->pos = reader->size;
+        return 0;
+    }
 
-    size_t cursor = start;
-    int have_picture = 0;
-    while (cursor < reader->size) {
-        size_t nal = cursor + (size_t)code_len;
-        if (nal >= reader->size) {
-            cursor = reader->size;
-            break;
+    size_t nal_start = unit_start;
+    int have_vcl = 0;
+    while (nal_start < reader->size) {
+        size_t header = nal_start + (size_t)code_len;
+        if (header >= reader->size) break;
+        int nal_type = reader->data[header] & 0x1f;
+
+        /* AUD marks the beginning of the next access unit. Keep it for the
+         * next call, but return the complete previous picture first. */
+        if (nal_type == 9 && nal_start > unit_start && have_vcl) {
+            *out = reader->data + unit_start;
+            *out_size = nal_start - unit_start;
+            *pts_ns = (int64_t)frame_index * 1000000000LL / VIDEO_FPS;
+            reader->pos = nal_start;
+            return *out_size > 0;
         }
-        int type = reader->data[nal] & 0x1f;
-        int is_slice = type >= 1 && type <= 5;
-        if (nal > start) {
-            int boundary = (type == 9) ||
-                (have_picture && (type == 6 || type == 7 || type == 8)) ||
-                (have_picture && is_slice && nal + 1 < reader->size &&
-                 (reader->data[nal + 1] & 0x80) != 0);
-            if (boundary) break;
-        }
-        if (is_slice) have_picture = 1;
+
+        if (nal_type >= 1 && nal_type <= 5) have_vcl = 1;
+
         int next_len = 0;
-        cursor = find_start_code(reader->data, reader->size, nal + 1, &next_len);
+        size_t next = find_start_code(reader->data, reader->size,
+                                      header + 1, &next_len);
+        if (next >= reader->size || next_len == 0) {
+            reader->pos = reader->size;
+            if (!have_vcl) return 0;
+            *out = reader->data + unit_start;
+            *out_size = reader->size - unit_start;
+            *pts_ns = (int64_t)frame_index * 1000000000LL / VIDEO_FPS;
+            return *out_size > 0;
+        }
+        nal_start = next;
         code_len = next_len;
     }
 
-    *out = reader->data + start;
-    *out_size = cursor - start;
-    *pts_ns = (int64_t)frame_index * 1000000000LL / VIDEO_FPS;
-    reader->pos = cursor;
-    return *out_size > 0;
+    reader->pos = reader->size;
+    return 0;
 }
 
 static int load_sample(const char *path, h264_reader *reader, void **mapping) {
@@ -418,6 +429,17 @@ static int load_sample(const char *path, h264_reader *reader, void **mapping) {
     reader->data = (const uint8_t *)*mapping;
     reader->size = (size_t)st.st_size;
     reader->pos = 0;
+
+    char diagnostic[512];
+    size_t preview = reader->size < 16 ? reader->size : 16;
+    char hex[16 * 3 + 1] = {0};
+    for (size_t i = 0; i < preview; ++i) {
+        snprintf(hex + i * 3, sizeof(hex) - i * 3, "%02X ", reader->data[i]);
+    }
+    snprintf(diagnostic, sizeof(diagnostic),
+             "Loaded sample.h264: path=%s size=%lu bytes first_bytes=%s",
+             path, (unsigned long)reader->size, hex);
+    log_line(diagnostic);
     return 1;
 }
 
