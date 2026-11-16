@@ -306,11 +306,17 @@ static int load_sample(const char *path, h264_reader *reader, void **mapping) {
     return 1;
 }
 
-static int feed_video(const uint8_t *data, size_t size, int64_t pts_ns) {
+static int feed_video(const uint8_t *data, size_t size, int64_t pts_ns,
+                      int *last_rc, int *attempts) {
+    *last_rc = 0;
+    *attempts = 0;
     for (int attempt = 0; attempt < MAX_FEED_RETRIES; ++attempt) {
         int rc = NDL_DirectVideoPlay((void *)data, (unsigned int)size,
                                      (long long)(pts_ns / 1000));
+        *last_rc = rc;
+        *attempts = attempt + 1;
         if (rc == 0) return 1;
+        /* Keep the last native result; the caller records it if retries expire. */
         sleep_ns(FEED_BACKOFF_NS);
     }
     return 0;
@@ -487,8 +493,18 @@ int main(int argc, char **argv) {
         if (clock_origin == 0) clock_origin = monotonic_ns() - pts;
         sleep_ns(clock_origin + pts - monotonic_ns());
 
-        if (!feed_video(unit, unit_size, pts)) {
-            log_line("ERROR: NDL_DirectVideoPlay stopped accepting video access units");
+        int feed_rc = 0;
+        int feed_attempts = 0;
+        if (!feed_video(unit, unit_size, pts, &feed_rc, &feed_attempts)) {
+            char line[512];
+            const char *ndl_error = NDL_DirectMediaGetError();
+            snprintf(line, sizeof(line),
+                     "ERROR: NDL_DirectVideoPlay failed frame=%ld size=%lu pts_us=%lld rc=%d attempts=%d error=%s",
+                     frames, (unsigned long)unit_size, (long long)(pts / 1000),
+                     feed_rc, feed_attempts, ndl_error ? ndl_error : "(none)");
+            log_line(line);
+            log_line(g_load_completed ? "LOADCOMPLETED had been received before feed failure" :
+                                       "LOADCOMPLETED had NOT been received before feed failure");
             failed = 1;
             break;
         }
