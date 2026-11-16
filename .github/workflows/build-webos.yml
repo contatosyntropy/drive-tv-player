@@ -149,7 +149,7 @@ jobs:
             build/native-media-probe/package/sample.hevc || true
           test -s build/native-media-probe/package/sample.hevc
           ffprobe -v error -select_streams v:0 -show_entries stream=profile,width,height,pix_fmt,r_frame_rate \
-            -of json build/native-media-probe/source.mkv > build/native-media-probe/source-video.json
+            -of json build/native-media-probe/source.mkv > build/native-media-probe/source-video.json || true
           python3 - <<'PY'
           import json, re
           from pathlib import Path
@@ -164,7 +164,7 @@ jobs:
           if "10" not in video.get("profile", ""):
               raise SystemExit("The selected Drive video is not identified as HEVC Main 10.")
           data = Path("build/native-media-probe/package/sample.hevc").read_bytes()
-          starts = list(re.finditer(b"\\x00\\x00(?:\\x00)?\\x01", data))
+          starts = list(re.finditer(b"\x00\x00(?:\x00)?\x01", data))
           types = [(data[m.end()] >> 1) & 0x3f for m in starts if m.end() + 1 < len(data)]
           vcl = sum(1 for t in types if t <= 31)
           aud = types.count(35)
