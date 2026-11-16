@@ -177,6 +177,28 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/api/probe-log/status" && request.method === "GET") {
+      if (env.PROBE_LOG_STORE) {
+        const storeId = env.PROBE_LOG_STORE.idFromName("global");
+        const store = env.PROBE_LOG_STORE.get(storeId);
+        const latest = await store.fetch("https://probe-log-store/latest");
+        return new Response(JSON.stringify({
+          worker: "drive-tv-player",
+          storage: "durable-object",
+          durableObjectBinding: true,
+          kvBinding: !!env.PROBE_LOGS,
+          latestStatus: latest.status,
+          latestAvailable: latest.ok
+        }), { status: 200, headers: JSON_HEADERS });
+      }
+      return new Response(JSON.stringify({
+        worker: "drive-tv-player",
+        storage: env.PROBE_LOGS ? "kv-fallback" : "unconfigured",
+        durableObjectBinding: false,
+        kvBinding: !!env.PROBE_LOGS
+      }), { status: 200, headers: JSON_HEADERS });
+    }
+
     if (url.pathname === "/api/probe-log" && request.method === "POST") {
       try {
         const report = await request.text();
@@ -209,7 +231,7 @@ export default {
         return new Response(JSON.stringify({
           id,
           url: reportUrl.toString(),
-          storage: env.PROBE_LOGS ? "kv" : "cache-fallback",
+          storage: env.PROBE_LOG_STORE ? "durable-object" : (env.PROBE_LOGS ? "kv-fallback" : "unconfigured"),
           expiresIn: 86400
         }), {
           status: 201,
