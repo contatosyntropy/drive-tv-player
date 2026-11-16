@@ -188,9 +188,9 @@ int main(void){
     log_line("=== DIRECT GOOGLE DRIVE MKV STREAM START ===");
     char url[4096];if(!read_stream_url(url,sizeof(url))){log_line("stream-url.txt missing or invalid");return 2;}
     if(!strstr(url,"/api/video/")||!strstr(url,"?key=")){log_line("stream URL must be a Worker /api/video URL with key");return 2;}
-    RangeReader rr={0};rr.url=url;rr.cache=malloc(RANGE_CHUNK);rr.file_size=-1;rr.cache_start=-1;rr.curl=curl_easy_init();
-    if(!rr.cache||!rr.curl){log_line("Cannot initialize HTTP Range reader");return 3;}
     if(curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK){log_line("curl global init failed");return 3;}
+    RangeReader rr={0};rr.url=url;rr.cache=malloc(RANGE_CHUNK);rr.file_size=-1;rr.cache_start=-1;rr.curl=curl_easy_init();
+    if(!rr.cache||!rr.curl){log_line("Cannot initialize HTTP Range reader");if(rr.curl)curl_easy_cleanup(rr.curl);curl_global_cleanup();free(rr.cache);return 3;}
     AVFormatContext *fmt=avformat_alloc_context();uint8_t *avio_buf=av_malloc(AVIO_BUFFER);
     AVIOContext *avio=avio_alloc_context(avio_buf,AVIO_BUFFER,0,&rr,avio_read_packet,NULL,avio_seek);
     if(!fmt||!avio){log_line("Cannot allocate FFmpeg custom AVIO");return 4;}
