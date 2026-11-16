@@ -343,25 +343,11 @@ int main(int argc, char **argv) {
         return 4;
     }
 
-    /* webOS ordering from the upstream NDL sample:
-     * SDL_Init(0) -> NDL_DirectMediaInit -> SDL_INIT_VIDEO/window.
-     * Initializing the SDL video subsystem before NDL can leave the TV video plane black. */
-    const char *app_id = getenv("APPID");
-    if (!app_id) app_id = "com.syntropy.drivemediaprobe";
-    log_line("STAGE 1: SDL preinit ready; initializing NDL DirectMedia before SDL video");
-    int ndl_init_rc = NDL_DirectMediaInit(app_id, resource_released);
-    if (ndl_init_rc != 0) {
-        char line[512];
-        snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
-        log_line(line);
-    } else {
-        NDL_DirectMediaSetAppState(NDL_DIRECTMEDIA_APP_STATE_FOREGROUND);
-        log_line("NDL DirectMedia initialized");
-    }
-
+    /* Match the hardware-verified webosbrew sample sequence:
+     * SDL preinit -> fullscreen SDL window -> transparent present -> NDL init.
+     * The video decoder owns a plane behind this SDL surface. */
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
         log_line(SDL_GetError());
-        if (ndl_init_rc == 0) NDL_DirectMediaQuit();
         SDL_Quit();
         munmap(mapping, reader.size);
         return 6;
@@ -402,6 +388,19 @@ int main(int argc, char **argv) {
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
 
+    const char *app_id = getenv("APPID");
+    if (!app_id) app_id = "com.syntropy.drivemediaprobe";
+    log_line("STAGE 3: SDL window ready; initializing NDL DirectMedia");
+    int ndl_init_rc = NDL_DirectMediaInit(app_id, resource_released);
+    if (ndl_init_rc != 0) {
+        char line[512];
+        snprintf(line, sizeof(line), "NDL_DirectMediaInit failed: %s", NDL_DirectMediaGetError());
+        log_line(line);
+    } else {
+        NDL_DirectMediaSetAppState(NDL_DIRECTMEDIA_APP_STATE_FOREGROUND);
+        log_line("NDL DirectMedia initialized");
+    }
+
     if (ndl_init_rc != 0) {
         show_failure(renderer, mode.w, mode.h, "NDL INIT FAILED");
         SDL_DestroyRenderer(renderer);
@@ -412,7 +411,7 @@ int main(int argc, char **argv) {
     }
     
     render_stage(renderer, mode.w, mode.h, "NDL READY", "INITIALIZING MEDIA PIPELINE", 40);
-    log_line("STAGE 3: preparing NDL media load");
+    log_line("STAGE 4: preparing NDL media load");
     NDL_DIRECTMEDIA_DATA_INFO_T info = {
         .video = {
             .width = VIDEO_WIDTH,
@@ -428,7 +427,8 @@ int main(int argc, char **argv) {
                 .format = NDL_DIRECTMEDIA_AUDIO_PCM_FORMAT_S16LE,
                 .layout = "interleaved",
                 .channelMode = "stereo",
-                .sampleRate = NDL_DIRECTMEDIA_AUDIO_PCM_SAMPLE_RATE_OF(48000)
+                /* No audio stream: the upstream sample passes zero channels/rate. */
+                .sampleRate = NDL_DIRECTMEDIA_AUDIO_PCM_SAMPLE_RATE_NONE
             }
         }
     };
