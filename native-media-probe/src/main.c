@@ -3,8 +3,8 @@
  * API flow follows the public webosbrew/samples NDL DirectMedia example:
  * https://github.com/webosbrew/samples/tree/main/media/ndl/directmedia
  *
- * This probe intentionally tests HEVC video only. It does not touch the web player,
- * Google Drive, audio, subtitles, or the existing Native Probe.
+ * This probe feeds a five-second HEVC Main 10 excerpt extracted from the real Google Drive MKV.
+ * It validates the NDL hardware video path only; audio and PGS subtitles remain separate steps.
  */
 #define NDL_DIRECTMEDIA_API_VERSION 2
 
