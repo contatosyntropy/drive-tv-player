@@ -73,11 +73,31 @@ jobs:
           # Generate a short H.264 elementary stream for the hardware decoder test.
           mkdir -p build/native-media-probe/package
           ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1280x720:rate=24' -t 5 -an -c:v libx264 -preset ultrafast -profile:v main -pix_fmt yuv420p -x264-params 'aud=1:keyint=48:min-keyint=48:scenecut=0:bframes=0' -f h264 build/native-media-probe/package/sample.h264
+          test -s build/native-media-probe/package/sample.h264
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("build/native-media-probe/package/sample.h264")
+          data = p.read_bytes()
+          starts = list(re.finditer(b"\\x00\\x00(?:\\x00)?\\x01", data))
+          nal_types = []
+          for m in starts:
+              header = m.end()
+              if header < len(data):
+                  nal_types.append(data[header] & 0x1f)
+          vcl = sum(1 for t in nal_types if 1 <= t <= 5)
+          aud = nal_types.count(9)
+          print(f"H.264 sample validation: {len(data)} bytes, {len(starts)} Annex-B NAL units, {vcl} VCL NALs, {aud} AUD markers")
+          if not starts or not vcl:
+              raise SystemExit("Generated sample.h264 has no parseable Annex-B video slices")
+          PY
           cmake -S native-media-probe -B build/native-media-probe -DCMAKE_TOOLCHAIN_FILE="$SDK/share/buildroot/toolchainfile.cmake" -DCMAKE_BUILD_TYPE=Release
           cmake --build build/native-media-probe --parallel 2
 
           cp native-media-probe/appinfo.json build/native-media-probe/package/
           cp build/native-media-probe/drive-tv-native-media-probe build/native-media-probe/package/
+          test -s build/native-media-probe/package/sample.h264
+          ls -lh build/native-media-probe/package/sample.h264
           mkdir -p build/native-probe/package
           cp native-probe/appinfo.json build/native-probe/package/
           cp build/native-probe/drive-tv-native-probe build/native-probe/package/
