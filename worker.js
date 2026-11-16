@@ -190,28 +190,21 @@ export default {
         const reportUrl = new URL("/api/probe-log/" + id, url.origin);
         const storedReport = report + "\nREPORT_ID=" + id;
 
-        // KV é compartilhado entre regiões/PoPs. O Cache API abaixo é mantido
-        // apenas como fallback temporário até o binding PROBE_LOGS ser criado.
-        if (env.PROBE_LOGS) {
+        // Durable Objects provide strongly consistent read-after-write storage.
+        if (env.PROBE_LOG_STORE) {
+          const storeId = env.PROBE_LOG_STORE.idFromName("global");
+          const store = env.PROBE_LOG_STORE.get(storeId);
+          const saved = await store.fetch("https://probe-log-store/report/" + id, {
+            method: "PUT",
+            body: storedReport
+          });
+          if (!saved.ok) throw new Error("Durable Object storage returned HTTP " + saved.status);
+        } else if (env.PROBE_LOGS) {
+          // Compatibility fallback only; KV propagation can delay /latest.
           await env.PROBE_LOGS.put("report:" + id, storedReport, { expirationTtl: 86400 });
           await env.PROBE_LOGS.put("latest", id, { expirationTtl: 86400 });
         } else {
-          const cache = caches.default;
-          await cache.put(
-            new Request(reportUrl.toString(), { method: "GET" }),
-            new Response(storedReport, {
-              status: 200,
-              headers: {
-                "Content-Type": "text/plain; charset=utf-8",
-                "Cache-Control": "public, max-age=86400",
-                "X-Content-Type-Options": "nosniff"
-              }
-            })
-          );
-          await cache.put(
-            new Request(new URL("/api/probe-log/latest-id", url.origin).toString()),
-            new Response(id, { headers: { "Cache-Control": "public, max-age=86400" } })
-          );
+          throw new Error("PROBE_LOG_STORE binding is not configured.");
         }
         return new Response(JSON.stringify({
           id,
@@ -228,42 +221,38 @@ export default {
     }
 
     if (url.pathname === "/api/probe-log/latest" && request.method === "GET") {
+      if (env.PROBE_LOG_STORE) {
+        const storeId = env.PROBE_LOG_STORE.idFromName("global");
+        const store = env.PROBE_LOG_STORE.get(storeId);
+        const result = await store.fetch("https://probe-log-store/latest");
+        return new Response(result.body, { status: result.status, headers: {
+          "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff"
+        }});
+      }
       if (env.PROBE_LOGS) {
         const id = await env.PROBE_LOGS.get("latest");
         if (!id) return jsonError("Ainda não há diagnóstico recente.", 404);
         const report = await env.PROBE_LOGS.get("report:" + id);
         if (!report) return jsonError("Diagnóstico recente expirado ou ainda não sincronizado.", 404);
-        return new Response(report, {
-          status: 200,
-          headers: {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff"
-          }
-        });
+        return new Response(report, { status: 200, headers: {
+          "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff"
+        }});
       }
-      const cache = caches.default;
-      const latest = await cache.match(new Request(new URL("/api/probe-log/latest-id", url.origin).toString()));
-      if (!latest) return jsonError("Ainda não há diagnóstico recente. O armazenamento compartilhado ainda não está configurado.", 404);
-      const id = (await latest.text()).trim();
-      const cached = await cache.match(new Request(new URL("/api/probe-log/" + id, url.origin).toString()));
-      if (!cached) return jsonError("Diagnóstico recente expirado.", 404);
-      return new Response(cached.body, { status: 200, headers: {
-        "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff"
-      }});
+      return jsonError("Armazenamento de diagnósticos não configurado.", 503);
     }
 
     const probeLogMatch = url.pathname.match(/^\\/api\\/probe-log\\/([A-Z]{8})$/);
     if (probeLogMatch && request.method === "GET") {
       let report = null;
-      if (env.PROBE_LOGS) {
+      if (env.PROBE_LOG_STORE) {
+        const storeId = env.PROBE_LOG_STORE.idFromName("global");
+        const store = env.PROBE_LOG_STORE.get(storeId);
+        const result = await store.fetch("https://probe-log-store/report/" + probeLogMatch[1]);
+        report = result.ok ? await result.text() : null;
+      } else if (env.PROBE_LOGS) {
         report = await env.PROBE_LOGS.get("report:" + probeLogMatch[1]);
-      } else {
-        const cached = await caches.default.match(
-          new Request(new URL("/api/probe-log/" + probeLogMatch[1], url.origin).toString())
-        );
-        report = cached ? await cached.text() : null;
       }
       if (!report) return jsonError("Relatório não encontrado ou expirado.", 404);
       return new Response(report, {
@@ -339,3 +328,45 @@ export default {
     return env.ASSETS.fetch(request);
   }
 };
+
+
+// Single strongly-consistent store for playback diagnostics. All report writes
+// and the "latest" pointer are serialized by one Durable Object instance.
+export class ProbeLogStore {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const reportMatch = url.pathname.match(/^\\/report\\/([A-Z]{8})$/);
+
+    if (request.method === "PUT" && reportMatch) {
+      const report = await request.text();
+      if (!report || report.length > 24000) {
+        return new Response("Invalid diagnostic report.", { status: 413 });
+      }
+      await this.ctx.storage.put("report:" + reportMatch[1], report);
+      await this.ctx.storage.put("latest", reportMatch[1]);
+      return new Response("stored", { status: 201 });
+    }
+
+    if (request.method === "GET" && url.pathname === "/latest") {
+      const id = await this.ctx.storage.get("latest");
+      if (!id) return new Response("Ainda não há diagnóstico recente.", { status: 404 });
+      const report = await this.ctx.storage.get("report:" + id);
+      if (!report) return new Response("Diagnóstico recente não encontrado.", { status: 404 });
+      return new Response(report, { status: 200 });
+    }
+
+    if (request.method === "GET" && reportMatch) {
+      const report = await this.ctx.storage.get("report:" + reportMatch[1]);
+      return report
+        ? new Response(report, { status: 200 })
+        : new Response("Relatório não encontrado ou expirado.", { status: 404 });
+    }
+
+    return new Response("Not found.", { status: 404 });
+  }
+}
