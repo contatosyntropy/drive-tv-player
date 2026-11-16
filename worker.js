@@ -187,7 +187,7 @@ export default {
         crypto.getRandomValues(random);
         const id = Array.from(random, byte => alphabet[byte % alphabet.length]).join("");
         const reportUrl = new URL("/api/probe-log/" + id, url.origin);
-        const storedReport = report + "\\nREPORT_ID=" + id;
+        const storedReport = report + "\nREPORT_ID=" + id;
 
         // KV é compartilhado entre regiões/PoPs. O Cache API abaixo é mantido
         // apenas como fallback temporário até o binding PROBE_LOGS ser criado.
