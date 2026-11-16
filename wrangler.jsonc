@@ -3,6 +3,12 @@
   "name": "drive-tv-player",
   "main": "./worker.js",
   "compatibility_date": "2026-11-14",
+  "kv_namespaces": [
+    {
+      "binding": "PROBE_LOGS",
+      "id": "02b9337f285f42ee89776d67836a3dc7"
+    }
+  ],
   "assets": {
     "directory": ".",
     "binding": "ASSETS",
