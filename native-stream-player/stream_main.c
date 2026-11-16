@@ -16,8 +16,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define RANGE_CHUNK (1024 * 1024)
-#define AVIO_BUFFER (64 * 1024)
+#define RANGE_CHUNK (8 * 1024 * 1024)
+#define AVIO_BUFFER (256 * 1024)
 #define MAX_FEED_RETRIES 200
 #define FEED_BACKOFF_NS 5000000LL
 #define LOG_PATH_SUFFIX "/drive-tv-native-stream-player.log"
@@ -109,8 +109,12 @@ static int fetch_range(RangeReader *r,int64_t start){
     curl_easy_setopt(r->curl,CURLOPT_SSL_VERIFYPEER,1L);
     curl_easy_setopt(r->curl,CURLOPT_SSL_VERIFYHOST,2L);
     curl_easy_setopt(r->curl,CURLOPT_USERAGENT,"DriveTVNativeStream/0.1");
+    struct timespec t0,t1;clock_gettime(CLOCK_MONOTONIC,&t0);
+    curl_easy_setopt(r->curl,CURLOPT_TCP_KEEPALIVE,1L);
     CURLcode code=curl_easy_perform(r->curl);long status=0;
     curl_easy_getinfo(r->curl,CURLINFO_RESPONSE_CODE,&status);
+    clock_gettime(CLOCK_MONOTONIC,&t1);
+    double elapsed=(double)(t1.tv_sec-t0.tv_sec)+(double)(t1.tv_nsec-t0.tv_nsec)/1000000000.0;
     curl_slist_free_all(headers);
     if(code!=CURLE_OK || status!=206 || out.used==0){
         snprintf(r->error,sizeof(r->error),"HTTP Range failed: curl=%d HTTP=%ld bytes=%lu",code,status,(unsigned long)out.used);
@@ -119,8 +123,9 @@ static int fetch_range(RangeReader *r,int64_t start){
     char *slash=strrchr(r->content_range,'/');
     if(slash && slash[1]!='*'){int64_t total=atoll(slash+1);if(total>0)r->file_size=total;}
     r->cache_start=start;r->cache_len=out.used;
-    char line[256];snprintf(line,sizeof(line),"HTTP Range OK: bytes=%lld-%lld received=%lu total=%lld",
-      (long long)start,(long long)(start+(int64_t)out.used-1),(unsigned long)out.used,(long long)r->file_size);
+    char line[320];double mbps=elapsed>0.0?((double)out.used*8.0/1000000.0)/elapsed:0.0;
+    snprintf(line,sizeof(line),"HTTP Range OK: bytes=%lld-%lld received=%lu total=%lld elapsed=%.3fs throughput=%.2fMbps",
+      (long long)start,(long long)(start+(int64_t)out.used-1),(unsigned long)out.used,(long long)r->file_size,elapsed,mbps);
     log_line(line);return 0;
 }
 static int avio_read_packet(void *opaque,uint8_t *buf,int buf_size){
