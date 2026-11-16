@@ -660,8 +660,6 @@ int main(int argc, char **argv) {
         char line[256];
         snprintf(line, sizeof(line), "NDL VIDEO FEED OK - %ld H.264 frames submitted", frames);
         log_line(line);
-        char detail[96];
-        snprintf(detail, sizeof(detail), "%ld H264 FRAMES SUBMITTED", frames);
         log_line(g_load_completed ? "NDL LOADCOMPLETED observed during feed" :
                                    "NDL LOADCOMPLETED not observed during feed");
         log_line(g_playing ? "NDL PLAYING event observed during feed" :
@@ -698,7 +696,7 @@ int main(int argc, char **argv) {
         SDL_Delay(30);
     }
 
-    if (failed != 2) {
+    if (failed == 0) {
         char summary[256];
         snprintf(summary, sizeof(summary), "Final events: LOADCOMPLETED=%s PLAYING=%s frames=%ld",
                  g_load_completed ? "yes" : "no", g_playing ? "yes" : "no", frames);
