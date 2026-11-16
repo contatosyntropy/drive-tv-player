@@ -109,6 +109,53 @@ static void show_failure(SDL_Renderer *renderer, int width, int height, const ch
 }
 
 
+static void show_failure_detail(SDL_Renderer *renderer, int width, int height,
+                                const char *detail) {
+    SDL_SetRenderDrawColor(renderer, 70, 12, 18, 255);
+    SDL_RenderClear(renderer);
+    SDL_Color white = {255, 255, 255, 255};
+    SDL_Color pink = {255, 190, 190, 255};
+    int scale = width / 180;
+    if (scale < 3) scale = 3;
+    if (scale > 7) scale = 7;
+    draw_text(renderer, "MEDIA PROBE STOPPED", width / 2, height / 3, scale, white);
+    draw_text(renderer, "NDL LOAD FAILED", width / 2, height / 2 - 30, scale, pink);
+
+    /* Split the native error into short lines so it remains readable on a TV. */
+    char line1[33] = {0};
+    char line2[33] = {0};
+    if (detail && *detail) {
+        size_t n = strlen(detail);
+        size_t first = n > 32 ? 32 : n;
+        memcpy(line1, detail, first);
+        if (n > first) {
+            size_t second = n - first;
+            if (second > 32) second = 32;
+            memcpy(line2, detail + first, second);
+        }
+    } else {
+        snprintf(line1, sizeof(line1), "NO ERROR TEXT RETURNED");
+    }
+    draw_text(renderer, line1, width / 2, height / 2 + 35, scale > 4 ? scale - 1 : scale, white);
+    if (line2[0]) draw_text(renderer, line2, width / 2, height / 2 + 75, scale > 4 ? scale - 1 : scale, white);
+    draw_text(renderer, "BACK TO EXIT", width / 2, height * 4 / 5, scale, white);
+    SDL_RenderPresent(renderer);
+
+    int running = 1;
+    while (running) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT ||
+                (event.type == SDL_KEYDOWN &&
+                 (event.key.keysym.sym == SDLK_ESCAPE ||
+                  event.key.keysym.sym == SDLK_BACKSPACE ||
+                  event.key.keysym.sym == SDLK_q))) running = 0;
+        }
+        SDL_Delay(20);
+    }
+}
+
+
 /* Persistent diagnostic screen: the TV must not silently return to the launcher. */
 static void render_stage(SDL_Renderer *renderer, int width, int height,
                          const char *stage, const char *detail, int progress) {
@@ -375,9 +422,10 @@ int main(int argc, char **argv) {
     };
     if (NDL_DirectMediaLoad(&info, media_callback) != 0) {
         char line[512];
-        snprintf(line, sizeof(line), "NDL_DirectMediaLoad failed: %s", NDL_DirectMediaGetError());
+        const char *ndl_error = NDL_DirectMediaGetError();
+        snprintf(line, sizeof(line), "NDL_DirectMediaLoad failed: %s", ndl_error ? ndl_error : "(no error text)");
         log_line(line);
-        show_failure(renderer, mode.w, mode.h, "NDL LOAD FAILED");
+        show_failure_detail(renderer, mode.w, mode.h, ndl_error);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         NDL_DirectMediaQuit();
