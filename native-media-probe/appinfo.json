@@ -1,10 +1,10 @@
 {
   "id": "com.syntropy.drivemediaprobe",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "vendor": "Syntropy Digital",
   "type": "native",
   "main": "drive-tv-native-media-probe",
   "title": "Drive TV Media Probe",
   "icon": "icon.png",
-  "appDescription": "Diagnóstico NDL com envio temporário de relatórios para recuperação remota."
+  "appDescription": "Teste de vídeo HEVC Main 10 extraído do MKV real do Google Drive."
 }
