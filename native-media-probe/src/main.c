@@ -9,6 +9,7 @@
 #define NDL_DIRECTMEDIA_API_VERSION 2
 
 #include <SDL.h>
+#include <curl/curl.h>
 #include <NDL_directmedia.h>
 
 #include <errno.h>
@@ -38,6 +39,117 @@ static void log_line(const char *message) {
         fclose(f);
     }
     fprintf(stderr, "%s\n", message);
+}
+
+typedef struct {
+    char data[512];
+    size_t size;
+} upload_response;
+
+static size_t receive_upload_response(char *data, size_t size, size_t count, void *opaque) {
+    upload_response *response = (upload_response *)opaque;
+    size_t bytes = size * count;
+    if (bytes > sizeof(response->data) - response->size - 1) {
+        bytes = sizeof(response->data) - response->size - 1;
+    }
+    memcpy(response->data + response->size, data, bytes);
+    response->size += bytes;
+    response->data[response->size] = '\\0';
+    return size * count;
+}
+
+static int upload_diagnostic_log(char *report_id, size_t report_id_size) {
+    const char *home = getenv("HOME");
+    char path[512];
+    snprintf(path, sizeof(path), "%s/drive-tv-native-media-probe.log", home ? home : "/tmp");
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+
+    char report[24001];
+    size_t length = fread(report, 1, sizeof(report) - 1, file);
+    fclose(file);
+    report[length] = '\\0';
+    if (length == 0 || length >= sizeof(report) - 1) return 0;
+
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return 0;
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        curl_global_cleanup();
+        return 0;
+    }
+    upload_response response = {{0}, 0};
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: text/plain; charset=utf-8");
+    curl_easy_setopt(curl, CURLOPT_URL, "https://drive-tv-player.contatosyntropy.workers.dev/api/probe-log");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, report);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)length);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive_upload_response);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DriveTVMediaProbe/1.0");
+    CURLcode code = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+
+    int ok = 0;
+    if (code == CURLE_OK && status == 201) {
+        const char *field = strstr(response.data, "\\"id\\":\\"");
+        if (field) {
+            field += 6;
+            if (strlen(field) >= 8 && report_id_size >= 9) {
+                memcpy(report_id, field, 8);
+                report_id[8] = '\\0';
+                ok = 1;
+            }
+        }
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    curl_global_cleanup();
+    return ok;
+}
+
+static void show_failure_report(SDL_Renderer *renderer, int width, int height,
+                                const char *report_id) {
+    SDL_SetRenderDrawColor(renderer, 70, 12, 18, 255);
+    SDL_RenderClear(renderer);
+    SDL_Color white = {255, 255, 255, 255};
+    SDL_Color pink = {255, 190, 190, 255};
+    int scale = width / 180;
+    if (scale < 4) scale = 4;
+    if (scale > 9) scale = 9;
+    draw_text(renderer, "MEDIA PROBE STOPPED", width / 2, height / 3 - 55, scale, white);
+    draw_text(renderer, "VIDEO FEED FAILED", width / 2, height / 3 + 20, scale, pink);
+    if (report_id && report_id[0]) {
+        draw_text(renderer, "REPORT UPLOADED", width / 2, height / 2 + 15, scale, white);
+        draw_text(renderer, report_id, width / 2, height / 2 + 85, scale + 2, pink);
+        draw_text(renderer, "SEND THIS CODE IN CHAT", width / 2, height / 2 + 160, scale, white);
+    } else {
+        draw_text(renderer, "REPORT UPLOAD FAILED", width / 2, height / 2 + 25, scale, pink);
+        draw_text(renderer, "CHECK NETWORK AND RETRY", width / 2, height / 2 + 100, scale, white);
+    }
+    draw_text(renderer, "BACK TO EXIT", width / 2, height * 4 / 5, scale, white);
+    SDL_RenderPresent(renderer);
+
+    int running = 1;
+    while (running) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT ||
+                (event.type == SDL_KEYDOWN &&
+                 (event.key.keysym.sym == SDLK_ESCAPE ||
+                  event.key.keysym.sym == SDLK_BACKSPACE ||
+                  event.key.keysym.sym == SDLK_q))) running = 0;
+        }
+        SDL_Delay(20);
+    }
 }
 
 static const uint8_t FONT[26][7] = {
@@ -326,6 +438,12 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
+    const char *home = getenv("HOME");
+    char old_log_path[512];
+    snprintf(old_log_path, sizeof(old_log_path), "%s/drive-tv-native-media-probe.log", home ? home : "/tmp");
+    unlink(old_log_path);
+    log_line("=== NEW NDL MEDIA PROBE RUN ===");
+
     char executable[512];
     ssize_t exe_len = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     if (exe_len <= 0) {
@@ -527,7 +645,11 @@ int main(int argc, char **argv) {
 
     if (failed == 1) {
         log_line("STAGE ERROR: video access-unit submission failed");
-        show_failure(renderer, mode.w, mode.h, "VIDEO FEED FAILED");
+        char report_id[16] = {0};
+        int uploaded = upload_diagnostic_log(report_id, sizeof(report_id));
+        log_line(uploaded ? "Diagnostic report uploaded to Worker" :
+                            "Diagnostic report upload failed");
+        show_failure_report(renderer, mode.w, mode.h, uploaded ? report_id : "");
     }
 
     /* Keep the video plane visible long enough for a person to confirm playback. */
