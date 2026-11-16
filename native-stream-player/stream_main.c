@@ -260,6 +260,7 @@ static int avio_read_packet_impl(void *opaque,uint8_t *buf,int buf_size){
     memcpy(buf,r->cache+offset,n);r->position+=(int64_t)n;
     pthread_mutex_unlock(&r->mutex);return (int)n;
 }
+static int64_t monotonic_ns(void);
 static int avio_read_packet(void *opaque,uint8_t *buf,int buf_size){
     int64_t started=monotonic_ns();
     int rc=avio_read_packet_impl(opaque,buf,buf_size);
