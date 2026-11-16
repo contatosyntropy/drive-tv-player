@@ -199,6 +199,10 @@ export default {
             }
           })
         );
+        await cache.put(
+          new Request(new URL("/api/probe-log/latest-id", url.origin).toString()),
+          new Response(id, { headers: { "Cache-Control": "public, max-age=86400" } })
+        );
         return new Response(JSON.stringify({ id, url: reportUrl.toString(), expiresIn: 86400 }), {
           status: 201,
           headers: JSON_HEADERS
@@ -206,6 +210,19 @@ export default {
       } catch (error) {
         return jsonError("Não foi possível armazenar o diagnóstico: " + error.message, 500);
       }
+    }
+
+    if (url.pathname === "/api/probe-log/latest" && request.method === "GET") {
+      const cache = caches.default;
+      const latest = await cache.match(new Request(new URL("/api/probe-log/latest-id", url.origin).toString()));
+      if (!latest) return jsonError("Ainda não há diagnóstico recente.", 404);
+      const id = (await latest.text()).trim();
+      const cached = await cache.match(new Request(new URL("/api/probe-log/" + id, url.origin).toString()));
+      if (!cached) return jsonError("Diagnóstico recente expirado.", 404);
+      return new Response(cached.body, { status: 200, headers: {
+        "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"
+      }});
     }
 
     const probeLogMatch = url.pathname.match(/^\/api\/probe-log\/([A-Z]{8})$/);
