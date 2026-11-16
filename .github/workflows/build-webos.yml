@@ -137,6 +137,9 @@ jobs:
           item = matches[0]
           safe_name = urllib.parse.quote(item["name"], safe="")
           media_url = f"{worker}/api/video/{item['id']}/{safe_name}?key={urllib.parse.quote(api_key)}"
+          stream_package = Path("build/native-stream-player/package")
+          stream_package.mkdir(parents=True, exist_ok=True)
+          (stream_package / "stream-url.txt").write_text(media_url + "\n")
           output_path = Path("build/native-media-probe/source.mkv")
           header_path = Path("build/native-media-probe/source-headers.txt")
           try:
@@ -228,6 +231,31 @@ jobs:
               f.write(png)
           PY
           cp build/native-probe/package/icon.png build/native-media-probe/package/icon.png
+          # Build a minimal target-side FFmpeg demuxer/bitstream-filter library set.
+          FFMPEG_ARCHIVE="$RUNNER_TEMP/ffmpeg-7.1.1.tar.xz"
+          curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz -o "$FFMPEG_ARCHIVE"
+          tar -xf "$FFMPEG_ARCHIVE" -C "$RUNNER_TEMP"
+          FFMPEG_PREFIX="$RUNNER_TEMP/ffmpeg-arm"
+          cd "$RUNNER_TEMP/ffmpeg-7.1.1"
+          ./configure --prefix="$FFMPEG_PREFIX" --enable-cross-compile --arch=arm --target-os=linux \
+            --cc="$CC" --ar="$AR" --nm="$NM" --ranlib="$RANLIB" --strip="$STRIP" \
+            --sysroot="$SDKTARGETSYSROOT" --disable-x86asm --disable-autodetect --disable-network \
+            --disable-programs --disable-doc --disable-debug --disable-everything \
+            --enable-avformat --enable-avcodec --enable-avutil --enable-demuxer=matroska \
+            --enable-bsf=hevc_mp4toannexb --enable-parser=hevc --enable-protocol=file \
+            --enable-pic --enable-static --disable-shared
+          make -j2
+          make install
+          cd "$GITHUB_WORKSPACE"
+          cmake -S native-stream-player -B build/native-stream-player \
+            -DCMAKE_TOOLCHAIN_FILE="$SDK/share/buildroot/toolchainfile.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DFFMPEG_ROOT="$FFMPEG_PREFIX"
+          cmake --build build/native-stream-player --parallel 2
+          cp native-stream-player/appinfo.json build/native-stream-player/package/
+          cp build/native-stream-player/drive-tv-native-stream-player build/native-stream-player/package/
+          cp build/native-stream-player/package/stream-url.txt build/native-stream-player/package/
+          cp build/native-probe/package/icon.png build/native-stream-player/package/icon.png
+          file build/native-stream-player/package/drive-tv-native-stream-player
           file build/native-probe/package/drive-tv-native-probe
           readelf -h build/native-probe/package/drive-tv-native-probe | grep -E 'Class:|Machine:'
 
@@ -238,6 +266,8 @@ jobs:
           ares-package --no-minify --outdir dist/web-app ./build/webos-app
           ares-package --no-minify --outdir dist/native-probe ./build/native-probe/package
           ares-package --no-minify --outdir dist/native-media-probe ./build/native-media-probe/package
+          ares-package --no-minify --outdir dist/native-stream-player ./build/native-stream-player/package
+          test -n "$(find dist/native-stream-player -maxdepth 1 -type f -name '*.ipk' -print -quit)"
           test -n "$(find dist/web-app -maxdepth 1 -type f -name '*.ipk' -print -quit)"
           test -n "$(find dist/native-probe -maxdepth 1 -type f -name '*.ipk' -print -quit)"
           test -n "$(find dist/native-media-probe -maxdepth 1 -type f -name '*.ipk' -print -quit)"
@@ -263,6 +293,14 @@ jobs:
         with:
           name: drive-tv-native-media-probe-ipk
           path: dist/native-media-probe/*.ipk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native streaming player package
+        uses: actions/upload-artifact@v4
+        with
+          name: drive-tv-native-stream-player-ipk
+          path: dist/native-stream-player/*.ipk
           if-no-files-found: error
           retention-days: 14
 
