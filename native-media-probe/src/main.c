@@ -109,6 +109,36 @@ static void show_failure(SDL_Renderer *renderer, int width, int height, const ch
 }
 
 
+/* Persistent diagnostic screen: the TV must not silently return to the launcher. */
+static void render_stage(SDL_Renderer *renderer, int width, int height,
+                         const char *stage, const char *detail, int progress) {
+    SDL_SetRenderDrawColor(renderer, 8, 12, 22, 255);
+    SDL_RenderClear(renderer);
+
+    SDL_Color white = {245, 248, 255, 255};
+    SDL_Color cyan = {110, 205, 255, 255};
+    SDL_Color muted = {170, 185, 205, 255};
+    int scale = width / 180;
+    if (scale < 3) scale = 3;
+    if (scale > 8) scale = 8;
+
+    draw_text(renderer, "DRIVE TV MEDIA TEST", width / 2, height / 4, scale, white);
+    draw_text(renderer, stage, width / 2, height / 2 - 35, scale, cyan);
+    draw_text(renderer, detail, width / 2, height / 2 + 25, scale > 4 ? scale - 1 : scale, muted);
+
+    int bar_w = width * 2 / 3;
+    int bar_h = 14;
+    SDL_Rect bg = {(width - bar_w) / 2, height * 3 / 4, bar_w, bar_h};
+    SDL_Rect fg = {bg.x, bg.y, bar_w * (progress < 0 ? 0 : (progress > 100 ? 100 : progress)) / 100, bar_h};
+    SDL_SetRenderDrawColor(renderer, 48, 60, 78, 255);
+    SDL_RenderFillRect(renderer, &bg);
+    SDL_SetRenderDrawColor(renderer, 75, 175, 245, 255);
+    SDL_RenderFillRect(renderer, &fg);
+    draw_text(renderer, "BACK TO EXIT", width / 2, height * 3 / 4 + 45, scale, white);
+    SDL_RenderPresent(renderer);
+}
+
+
 static void resource_released(const char *type) {
     char line[256];
     snprintf(line, sizeof(line), "NDL resource released: %s", type ? type : "?");
@@ -271,7 +301,7 @@ int main(int argc, char **argv) {
      * Initializing the SDL video subsystem before NDL can leave the TV video plane black. */
     const char *app_id = getenv("APPID");
     if (!app_id) app_id = "com.syntropy.drivemediaprobe";
-    log_line("SDL preinit ready; initializing NDL DirectMedia before SDL video");
+    log_line("STAGE 1: SDL preinit ready; initializing NDL DirectMedia before SDL video");
     int ndl_init_rc = NDL_DirectMediaInit(app_id, resource_released);
     if (ndl_init_rc != 0) {
         char line[512];
@@ -319,6 +349,8 @@ int main(int argc, char **argv) {
         return 9;
     }
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    render_stage(renderer, mode.w, mode.h, "SDL READY", "WINDOW CREATED", 20);
+    log_line("STAGE 2: SDL window and renderer created");
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
@@ -332,6 +364,8 @@ int main(int argc, char **argv) {
         return 5;
     }
     
+    render_stage(renderer, mode.w, mode.h, "NDL READY", "INITIALIZING MEDIA PIPELINE", 40);
+    log_line("STAGE 3: preparing NDL media load");
     NDL_DIRECTMEDIA_DATA_INFO_T info = {
         .video = {
             .width = VIDEO_WIDTH,
@@ -362,7 +396,8 @@ int main(int argc, char **argv) {
         munmap(mapping, reader.size);
         return 11;
     }
-    log_line("NDL LOAD REQUESTED - waiting for asynchronous LOADCOMPLETED event");
+    render_stage(renderer, mode.w, mode.h, "WAITING FOR NDL", "LOAD COMPLETED EVENT", 55);
+    log_line("STAGE 4: NDL LOAD REQUESTED - waiting for asynchronous LOADCOMPLETED event");
 
     /* Keep the native app alive and pump SDL while the TV's media pipeline loads. */
     int64_t load_deadline = monotonic_ns() + 12000000000LL;
@@ -386,21 +421,7 @@ int main(int argc, char **argv) {
     }
     if (!g_load_completed) {
         log_line("TIMEOUT: NDL did not report LOADCOMPLETED within 12 seconds");
-        /* Do not close immediately: leave the app alive for log inspection. */
-        int64_t diagnostic_until = monotonic_ns() + 30000000000LL;
-        while (monotonic_ns() < diagnostic_until) {
-            SDL_Event event;
-            while (SDL_PollEvent(&event)) {
-                if (event.type == SDL_QUIT ||
-                    (event.type == SDL_KEYDOWN &&
-                     (event.key.keysym.sym == SDLK_ESCAPE ||
-                      event.key.keysym.sym == SDLK_BACKSPACE))) {
-                    diagnostic_until = 0;
-                }
-            }
-            if (diagnostic_until == 0) break;
-            SDL_Delay(30);
-        }
+        show_failure(renderer, mode.w, mode.h, "NDL LOAD TIMEOUT");
         NDL_DirectMediaUnload();
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
@@ -409,7 +430,8 @@ int main(int argc, char **argv) {
         munmap(mapping, reader.size);
         return 12;
     }
-    log_line("NDL LOADCOMPLETED - feeding H.264 test pattern to TV hardware decoder");
+    render_stage(renderer, mode.w, mode.h, "NDL LOAD COMPLETE", "STARTING H264 DECODER", 70);
+    log_line("STAGE 5: NDL LOADCOMPLETED - feeding H.264 test pattern to TV hardware decoder");
 
     const uint8_t *unit = NULL;
     size_t unit_size = 0;
@@ -435,7 +457,7 @@ int main(int argc, char **argv) {
         sleep_ns(clock_origin + pts - monotonic_ns());
 
         if (!feed_video(unit, unit_size, pts)) {
-            log_line("NDL_DirectVideoPlay stopped accepting video access units");
+            log_line("ERROR: NDL_DirectVideoPlay stopped accepting video access units");
             failed = 1;
             break;
         }
@@ -446,6 +468,7 @@ int main(int argc, char **argv) {
         char line[256];
         snprintf(line, sizeof(line), "NDL VIDEO FEED OK - %ld H.264 frames submitted", frames);
         log_line(line);
+        render_stage(renderer, mode.w, mode.h, "VIDEO FEED OK", "H264 FRAMES SUBMITTED", 100);
     } else if (!failed) {
         log_line("No H.264 access units were parsed from sample.h264");
         failed = 1;
