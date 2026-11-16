@@ -15,6 +15,7 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define RANGE_CHUNK (8 * 1024 * 1024)
 #define AVIO_BUFFER (256 * 1024)
@@ -64,13 +65,28 @@ static int upload_log(char *id, size_t cap) {
 
 typedef struct {
     CURL *curl;
+    CURL *worker_curl;
     char *url;
     uint8_t *cache;
+    uint8_t *next_cache;
     size_t cache_len;
+    size_t next_len;
     int64_t cache_start;
+    int64_t next_start;
     int64_t file_size;
     int64_t position;
-    char content_range[160];
+    pthread_t worker;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int sync_ready;
+    int worker_started;
+    int worker_stop;
+    int worker_pending;
+    int worker_busy;
+    int next_ready;
+    int64_t request_start;
+    unsigned long generation;
+    unsigned long request_generation;
     char error[256];
 } RangeReader;
 
@@ -80,39 +96,41 @@ static size_t range_write(char *p,size_t a,size_t b,void *opaque){
     if(n>o->cap-o->used)return 0;
     memcpy(o->data+o->used,p,n);o->used+=n;return n;
 }
+typedef struct { char value[160]; } RangeHeader;
 static size_t range_header(char *p,size_t a,size_t b,void *opaque){
-    RangeReader *r=opaque;size_t n=a*b;
+    RangeHeader *h=opaque;size_t n=a*b;
     if(n>14 && !strncasecmp(p,"Content-Range:",14)){
-        size_t k=n-14;if(k>=sizeof(r->content_range))k=sizeof(r->content_range)-1;
-        memcpy(r->content_range,p+14,k);r->content_range[k]=0;
+        size_t k=n-14;if(k>=sizeof(h->value))k=sizeof(h->value)-1;
+        memcpy(h->value,p+14,k);h->value[k]=0;
     }return n;
 }
-static int fetch_range(RangeReader *r,int64_t start){
+static int fetch_range_data(RangeReader *r,CURL *curl,uint8_t *dest,
+                            int64_t start,size_t *received,int64_t *known_size){
     int64_t end=start+RANGE_CHUNK-1;
-    if(r->file_size>0 && end>=r->file_size)end=r->file_size-1;
+    if(*known_size>0 && end>=*known_size)end=*known_size-1;
     if(end<start)return AVERROR_EOF;
     char range[128];snprintf(range,sizeof(range),"Range: bytes=%lld-%lld",(long long)start,(long long)end);
     struct curl_slist *headers=NULL;headers=curl_slist_append(headers,range);
-    RangeBuffer out={r->cache,RANGE_CHUNK,0};r->content_range[0]=0;
-    curl_easy_reset(r->curl);
-    curl_easy_setopt(r->curl,CURLOPT_URL,r->url);
-    curl_easy_setopt(r->curl,CURLOPT_HTTPHEADER,headers);
-    curl_easy_setopt(r->curl,CURLOPT_FOLLOWLOCATION,1L);
-    curl_easy_setopt(r->curl,CURLOPT_ACCEPT_ENCODING,"identity");
-    curl_easy_setopt(r->curl,CURLOPT_WRITEFUNCTION,range_write);
-    curl_easy_setopt(r->curl,CURLOPT_WRITEDATA,&out);
-    curl_easy_setopt(r->curl,CURLOPT_HEADERFUNCTION,range_header);
-    curl_easy_setopt(r->curl,CURLOPT_HEADERDATA,r);
-    curl_easy_setopt(r->curl,CURLOPT_CONNECTTIMEOUT,20L);
-    curl_easy_setopt(r->curl,CURLOPT_TIMEOUT,90L);
-    curl_easy_setopt(r->curl,CURLOPT_NOSIGNAL,1L);
-    curl_easy_setopt(r->curl,CURLOPT_SSL_VERIFYPEER,1L);
-    curl_easy_setopt(r->curl,CURLOPT_SSL_VERIFYHOST,2L);
-    curl_easy_setopt(r->curl,CURLOPT_USERAGENT,"DriveTVNativeStream/0.1");
+    RangeBuffer out={dest,RANGE_CHUNK,0};RangeHeader rh={{0}};
+    curl_easy_reset(curl);
+    curl_easy_setopt(curl,CURLOPT_URL,r->url);
+    curl_easy_setopt(curl,CURLOPT_HTTPHEADER,headers);
+    curl_easy_setopt(curl,CURLOPT_FOLLOWLOCATION,1L);
+    curl_easy_setopt(curl,CURLOPT_ACCEPT_ENCODING,"identity");
+    curl_easy_setopt(curl,CURLOPT_WRITEFUNCTION,range_write);
+    curl_easy_setopt(curl,CURLOPT_WRITEDATA,&out);
+    curl_easy_setopt(curl,CURLOPT_HEADERFUNCTION,range_header);
+    curl_easy_setopt(curl,CURLOPT_HEADERDATA,&rh);
+    curl_easy_setopt(curl,CURLOPT_CONNECTTIMEOUT,20L);
+    curl_easy_setopt(curl,CURLOPT_TIMEOUT,90L);
+    curl_easy_setopt(curl,CURLOPT_NOSIGNAL,1L);
+    curl_easy_setopt(curl,CURLOPT_SSL_VERIFYPEER,1L);
+    curl_easy_setopt(curl,CURLOPT_SSL_VERIFYHOST,2L);
+    curl_easy_setopt(curl,CURLOPT_USERAGENT,"DriveTVNativeStream/0.2");
+    curl_easy_setopt(curl,CURLOPT_TCP_KEEPALIVE,1L);
     struct timespec t0,t1;clock_gettime(CLOCK_MONOTONIC,&t0);
-    curl_easy_setopt(r->curl,CURLOPT_TCP_KEEPALIVE,1L);
-    CURLcode code=curl_easy_perform(r->curl);long status=0;
-    curl_easy_getinfo(r->curl,CURLINFO_RESPONSE_CODE,&status);
+    CURLcode code=curl_easy_perform(curl);long status=0;
+    curl_easy_getinfo(curl,CURLINFO_RESPONSE_CODE,&status);
     clock_gettime(CLOCK_MONOTONIC,&t1);
     double elapsed=(double)(t1.tv_sec-t0.tv_sec)+(double)(t1.tv_nsec-t0.tv_nsec)/1000000000.0;
     curl_slist_free_all(headers);
@@ -120,35 +138,114 @@ static int fetch_range(RangeReader *r,int64_t start){
         snprintf(r->error,sizeof(r->error),"HTTP Range failed: curl=%d HTTP=%ld bytes=%lu",code,status,(unsigned long)out.used);
         log_line(r->error);return AVERROR(EIO);
     }
-    char *slash=strrchr(r->content_range,'/');
-    if(slash && slash[1]!='*'){int64_t total=atoll(slash+1);if(total>0)r->file_size=total;}
-    r->cache_start=start;r->cache_len=out.used;
+    char *slash=strrchr(rh.value,'/');
+    if(slash && slash[1]!='*'){int64_t total=atoll(slash+1);if(total>0)*known_size=total;}
+    *received=out.used;
     char line[320];double mbps=elapsed>0.0?((double)out.used*8.0/1000000.0)/elapsed:0.0;
-    snprintf(line,sizeof(line),"HTTP Range OK: bytes=%lld-%lld received=%lu total=%lld elapsed=%.3fs throughput=%.2fMbps",
-      (long long)start,(long long)(start+(int64_t)out.used-1),(unsigned long)out.used,(long long)r->file_size,elapsed,mbps);
+    snprintf(line,sizeof(line),"HTTP Range OK: bytes=%lld-%lld received=%lu total=%lld elapsed=%.3fs throughput=%.2fMbps%s",
+      (long long)start,(long long)(start+(int64_t)out.used-1),(unsigned long)out.used,
+      (long long)*known_size,elapsed,mbps,curl==r->worker_curl?" [prefetch]":" [read]");
     log_line(line);return 0;
+}
+static void schedule_prefetch_locked(RangeReader *r){
+    if(r->worker_stop || r->worker_pending || r->worker_busy || r->next_ready || r->cache_start<0)return;
+    int64_t next=r->cache_start+(int64_t)r->cache_len;
+    if(r->file_size>0 && next>=r->file_size)return;
+    r->request_start=next;r->request_generation=r->generation;
+    r->worker_pending=1;pthread_cond_broadcast(&r->cond);
+}
+static void *range_prefetch_worker(void *opaque){
+    RangeReader *r=opaque;
+    for(;;){
+        pthread_mutex_lock(&r->mutex);
+        while(!r->worker_stop && !r->worker_pending)pthread_cond_wait(&r->cond,&r->mutex);
+        if(r->worker_stop){pthread_mutex_unlock(&r->mutex);break;}
+        int64_t start=r->request_start;unsigned long gen=r->request_generation;
+        r->worker_pending=0;r->worker_busy=1;
+        int64_t known=r->file_size;
+        pthread_mutex_unlock(&r->mutex);
+        size_t got=0;int rc=fetch_range_data(r,r->worker_curl,r->next_cache,start,&got,&known);
+        pthread_mutex_lock(&r->mutex);
+        if(gen==r->generation && rc>=0){
+            r->next_start=start;r->next_len=got;r->file_size=known;r->next_ready=1;
+        }else if(gen==r->generation && rc<0){
+            snprintf(r->error,sizeof(r->error),"Background prefetch failed at byte %lld",(long long)start);
+        }
+        r->worker_busy=0;
+        pthread_cond_broadcast(&r->cond);
+        pthread_mutex_unlock(&r->mutex);
+    }
+    return NULL;
+}
+static int range_reader_start(RangeReader *r){
+    if(pthread_mutex_init(&r->mutex,NULL)!=0)return AVERROR(EIO);
+    if(pthread_cond_init(&r->cond,NULL)!=0){pthread_mutex_destroy(&r->mutex);return AVERROR(EIO);}
+    r->sync_ready=1;r->cache_start=-1;r->next_start=-1;r->file_size=-1;
+    r->cache=malloc(RANGE_CHUNK);r->next_cache=malloc(RANGE_CHUNK);
+    r->curl=curl_easy_init();r->worker_curl=curl_easy_init();
+    if(!r->cache||!r->next_cache||!r->curl||!r->worker_curl)return AVERROR(ENOMEM);
+    size_t got=0;int64_t known=-1;
+    int rc=fetch_range_data(r,r->curl,r->cache,0,&got,&known);
+    if(rc<0)return rc;
+    r->cache_start=0;r->cache_len=got;r->file_size=known;r->position=0;
+    if(pthread_create(&r->worker,NULL,range_prefetch_worker,r)!=0)return AVERROR(EIO);
+    r->worker_started=1;
+    pthread_mutex_lock(&r->mutex);schedule_prefetch_locked(r);pthread_mutex_unlock(&r->mutex);
+    log_line("Background HTTP Range prefetch enabled (two 8 MiB buffers)");
+    return 0;
+}
+static void range_reader_stop(RangeReader *r){
+    if(r->sync_ready){
+        pthread_mutex_lock(&r->mutex);r->worker_stop=1;pthread_cond_broadcast(&r->cond);pthread_mutex_unlock(&r->mutex);
+        if(r->worker_started)pthread_join(r->worker,NULL);
+    }
+    if(r->curl)curl_easy_cleanup(r->curl);
+    if(r->worker_curl)curl_easy_cleanup(r->worker_curl);
+    free(r->cache);free(r->next_cache);
+    if(r->sync_ready){pthread_cond_destroy(&r->cond);pthread_mutex_destroy(&r->mutex);}
 }
 static int avio_read_packet(void *opaque,uint8_t *buf,int buf_size){
     RangeReader *r=opaque;if(buf_size<=0)return 0;
-    if(r->file_size>0 && r->position>=r->file_size)return AVERROR_EOF;
-    if(r->position<r->cache_start || r->position>=r->cache_start+(int64_t)r->cache_len){
-        int rc=fetch_range(r,r->position);if(rc<0)return rc;
+    pthread_mutex_lock(&r->mutex);
+    for(;;){
+        if(r->file_size>0 && r->position>=r->file_size){pthread_mutex_unlock(&r->mutex);return AVERROR_EOF;}
+        if(r->cache_start>=0 && r->position>=r->cache_start &&
+           r->position<r->cache_start+(int64_t)r->cache_len)break;
+        if(r->next_ready && r->position>=r->next_start &&
+           r->position<r->next_start+(int64_t)r->next_len){
+            uint8_t *tmp=r->cache;r->cache=r->next_cache;r->next_cache=tmp;
+            r->cache_start=r->next_start;r->cache_len=r->next_len;
+            r->next_start=-1;r->next_len=0;r->next_ready=0;
+            schedule_prefetch_locked(r);continue;
+        }
+        int64_t target=r->position;
+        r->generation++;r->worker_pending=0;r->next_ready=0;
+        while(r->worker_busy)pthread_cond_wait(&r->cond,&r->mutex);
+        pthread_mutex_unlock(&r->mutex);
+        size_t got=0;int64_t known;
+        pthread_mutex_lock(&r->mutex);known=r->file_size;pthread_mutex_unlock(&r->mutex);
+        int fetch_rc=fetch_range_data(r,r->curl,r->cache,target,&got,&known);
+        pthread_mutex_lock(&r->mutex);
+        if(fetch_rc<0){pthread_mutex_unlock(&r->mutex);return fetch_rc;}
+        r->cache_start=target;r->cache_len=got;r->file_size=known;
+        schedule_prefetch_locked(r);
     }
     size_t offset=(size_t)(r->position-r->cache_start);
     size_t n=r->cache_len-offset;if(n>(size_t)buf_size)n=(size_t)buf_size;
     if(r->file_size>0 && (int64_t)n>r->file_size-r->position)n=(size_t)(r->file_size-r->position);
-    memcpy(buf,r->cache+offset,n);r->position+=(int64_t)n;return (int)n;
+    memcpy(buf,r->cache+offset,n);r->position+=(int64_t)n;
+    pthread_mutex_unlock(&r->mutex);return (int)n;
 }
 static int64_t range_seek_cb(void *opaque,int64_t offset,int whence){
-    RangeReader *r=opaque;
-    if(whence==AVSEEK_SIZE)return r->file_size>0?r->file_size:AVERROR(ENOSYS);
-    whence &= ~AVSEEK_FORCE;
-    int64_t next;
+    RangeReader *r=opaque;pthread_mutex_lock(&r->mutex);
+    if(whence==AVSEEK_SIZE){int64_t z=r->file_size;pthread_mutex_unlock(&r->mutex);return z>0?z:AVERROR(ENOSYS);}
+    whence &= ~AVSEEK_FORCE;int64_t next;
     if(whence==SEEK_SET)next=offset;
     else if(whence==SEEK_CUR)next=r->position+offset;
     else if(whence==SEEK_END && r->file_size>0)next=r->file_size+offset;
-    else return AVERROR(EINVAL);
-    if(next<0)return AVERROR(EINVAL);r->position=next;return next;
+    else {pthread_mutex_unlock(&r->mutex);return AVERROR(EINVAL);}
+    if(next<0){pthread_mutex_unlock(&r->mutex);return AVERROR(EINVAL);}
+    r->position=next;pthread_mutex_unlock(&r->mutex);return next;
 }
 static void media_callback(int type,long long number,const char *value){
     char line[256];snprintf(line,sizeof(line),"NDL event type=%d value=%lld %s",type,number,value?value:"");
@@ -195,8 +292,8 @@ int main(void){
     char url[4096];if(!read_stream_url(url,sizeof(url))){log_line("stream-url.txt missing or invalid");return 2;}
     if(!strstr(url,"/api/video/")||!strstr(url,"?key=")){log_line("stream URL must be a Worker /api/video URL with key");return 2;}
     if(curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK){log_line("curl global init failed");return 3;}
-    RangeReader rr={0};rr.url=url;rr.cache=malloc(RANGE_CHUNK);rr.file_size=-1;rr.cache_start=-1;rr.curl=curl_easy_init();
-    if(!rr.cache||!rr.curl){log_line("Cannot initialize HTTP Range reader");if(rr.curl)curl_easy_cleanup(rr.curl);curl_global_cleanup();free(rr.cache);return 3;}
+    RangeReader rr={0};rr.url=url;
+    if(range_reader_start(&rr)<0){log_line("Cannot initialize asynchronous HTTP Range reader");range_reader_stop(&rr);curl_global_cleanup();return 3;}
     AVFormatContext *fmt=avformat_alloc_context();uint8_t *avio_buf=av_malloc(AVIO_BUFFER);
     AVIOContext *avio=avio_alloc_context(avio_buf,AVIO_BUFFER,0,&rr,avio_read_packet,NULL,range_seek_cb);
     if(!fmt||!avio){log_line("Cannot allocate FFmpeg custom AVIO");return 4;}
@@ -265,7 +362,7 @@ int main(void){
         char id[16]={0};int up=upload_log(id,sizeof(id));(void)up;
     }else{NDL_DirectMediaUnload();NDL_DirectMediaQuit();}
     av_bsf_free(&bsf);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
-    avformat_close_input(&fmt);if(avio)avio_context_free(&avio);curl_easy_cleanup(rr.curl);curl_global_cleanup();free(rr.cache);
+    avformat_close_input(&fmt);if(avio)avio_context_free(&avio);range_reader_stop(&rr);curl_global_cleanup();
     return failed==1?10:0;
 
 fail_ui:
@@ -274,5 +371,5 @@ fail_early:
     {char s[300];snprintf(s,sizeof(s),"STREAM FAILED: %s",rr.error[0]?rr.error:"see preceding FFmpeg/NDL diagnostic");log_line(s);
      char id[16]={0};upload_log(id,sizeof(id));}
     if(fmt)avformat_close_input(&fmt);if(avio)avio_context_free(&avio);
-    if(rr.curl)curl_easy_cleanup(rr.curl);curl_global_cleanup();free(rr.cache);return 11;
+    range_reader_stop(&rr);curl_global_cleanup();return 11;
 }
