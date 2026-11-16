@@ -291,11 +291,11 @@ static void resource_released(const char *type){char s[200];snprintf(s,sizeof(s)
 static int64_t monotonic_ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (int64_t)t.tv_sec*1000000000LL+t.tv_nsec;}
 static void sleep_ns(int64_t ns){if(ns<=0)return;struct timespec t={(time_t)(ns/1000000000LL),(long)(ns%1000000000LL)};while(nanosleep(&t,&t)&&errno==EINTR){}}
 static void wait_until(int64_t target){int64_t now=monotonic_ns();if(target>now)sleep_ns(target-now);}
-static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t *clock_origin,int *last_rc){
+static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t decode_time_us,int64_t *clock_origin,int *last_rc){
     int64_t pts_abs=p->pts==AV_NOPTS_VALUE?0:av_rescale_q(p->pts,tb,AV_TIME_BASE_Q);
     int64_t dts_abs=p->dts==AV_NOPTS_VALUE?pts_abs:av_rescale_q(p->dts,tb,AV_TIME_BASE_Q);
     int64_t pts=pts_abs-origin_us;
-    int64_t dts=dts_abs-origin_us;
+    int64_t dts=decode_time_us;
     int64_t duration_us=p->duration>0?av_rescale_q(p->duration,tb,AV_TIME_BASE_Q):0;
     if(pts<0)pts=0;if(dts<0)dts=0;
     if(g_diag_last_dts_us!=AV_NOPTS_VALUE){
@@ -330,7 +330,7 @@ static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t *clock
         sleep_ns(FEED_BACKOFF_NS);
     }g_feed_retries+=MAX_FEED_RETRIES;return 0;
 }
-static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t *clock_origin,long *frames){
+static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t frame_interval_us,int64_t *clock_origin,long *frames){
     AVPacket *out=av_packet_alloc();if(!out)return AVERROR(ENOMEM);
     int last=0,result=0;
     while((result=av_bsf_receive_packet(bsf,out))>=0){
@@ -344,7 +344,7 @@ static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t *
               pts_us==AV_NOPTS_VALUE?-1.0:pts_us/1000.0,dts_us==AV_NOPTS_VALUE?-1.0:dts_us/1000.0,dur_us/1000.0,out->size);
             log_line(sample);g_diag_packet_samples++;
         }
-        if(!feed_frame(out,tb,origin_us,clock_origin,&last)){
+        if(!feed_frame(out,tb,origin_us,(int64_t)(*frames)*frame_interval_us,clock_origin,&last)){
             char s[300];const char *e=NDL_DirectMediaGetError();
             snprintf(s,sizeof(s),"NDL_DirectVideoPlay failed frame=%ld size=%d rc=%d error=%s",
               *frames,out->size,last,e?e:"(none)");log_line(s);av_packet_free(&out);return AVERROR(EIO);
@@ -447,6 +447,10 @@ int main(void){
     SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);SDL_RenderPresent(renderer);
     log_line("NDL load accepted; beginning continuous HEVC packet feed");
     AVPacket *packet=av_packet_alloc();int64_t origin_us=AV_NOPTS_VALUE,clock_origin=0;long frames=0;int failed=0;
+    AVRational frame_rate=st->avg_frame_rate.num>0?st->avg_frame_rate:st->r_frame_rate;
+    int64_t frame_interval_us=frame_rate.num>0?av_rescale_q(1,av_inv_q(frame_rate),AV_TIME_BASE_Q):41667;
+    if(frame_interval_us<=0)frame_interval_us=41667;
+    char pace_line[160];snprintf(pace_line,sizeof(pace_line),"DECODE_PACING synthetic_interval_us=%lld source_fps=%d/%d",(long long)frame_interval_us,frame_rate.num,frame_rate.den);log_line(pace_line);
     int demux_rc=0;const char *stop_reason="demux-ended";
     while((demux_rc=av_read_frame(fmt,packet))>=0){
         if(packet->stream_index==video){
@@ -461,7 +465,7 @@ int main(void){
             }
             rc=av_bsf_send_packet(bsf,packet);
             if(rc<0){log_line("HEVC bitstream filter rejected packet");failed=1;av_packet_unref(packet);break;}
-            rc=drain_bsf(bsf,bsf->time_base_out,origin_us,&clock_origin,&frames);
+            rc=drain_bsf(bsf,bsf->time_base_out,origin_us,frame_interval_us,&clock_origin,&frames);
             if(rc<0){failed=1;av_packet_unref(packet);break;}
         }
         av_packet_unref(packet);
@@ -471,7 +475,7 @@ int main(void){
     else if(demux_rc==AVERROR_EOF)stop_reason="eof";
     if(!failed){
         av_bsf_send_packet(bsf,NULL);
-        if(drain_bsf(bsf,bsf->time_base_out,origin_us==AV_NOPTS_VALUE?0:origin_us,&clock_origin,&frames)<0)failed=1;
+        if(drain_bsf(bsf,bsf->time_base_out,origin_us==AV_NOPTS_VALUE?0:origin_us,frame_interval_us,&clock_origin,&frames)<0)failed=1;
     }
     av_packet_free(&packet);
     {char s[320];snprintf(s,sizeof(s),"Stream ended: frames=%ld LOADCOMPLETED=%s PLAYING=%s demux_rc=%d stop_reason=%s",
