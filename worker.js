@@ -340,7 +340,7 @@ export class ProbeLogStore {
 
   async fetch(request) {
     const url = new URL(request.url);
-    const reportMatch = url.pathname.match(/^\\/report\\/([A-Z]{8})$/);
+    const reportMatch = url.pathname.match(/^\/report\/([A-Z]{8})$/);
 
     if (request.method === "PUT" && reportMatch) {
       const report = await request.text();
