@@ -243,7 +243,7 @@ jobs:
             --sysroot="$SDKTARGETSYSROOT" --disable-x86asm --disable-autodetect --disable-network \
             --disable-programs --disable-doc --disable-debug --disable-everything \
             --enable-avformat --enable-avcodec --enable-avutil --enable-demuxer=matroska \
-            --enable-bsf=hevc_mp4toannexb --enable-parser=hevc --enable-protocol=file \
+            --enable-bsf=hevc_mp4toannexb,hevc_metadata --enable-parser=hevc --enable-protocol=file \
             --enable-pic --enable-static --disable-shared
           make -j2
           make install
