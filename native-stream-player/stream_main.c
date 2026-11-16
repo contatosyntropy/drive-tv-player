@@ -49,6 +49,7 @@ static int64_t g_diag_late_total_ns = 0;
 static int64_t g_diag_late_max_ns = 0;
 static int64_t g_diag_duration_sum_us = 0;
 static long g_diag_timed_frames = 0;
+static long g_diag_packet_samples = 0;
 
 static void log_line(const char *s) {
     const char *home = getenv("HOME");
@@ -333,6 +334,16 @@ static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t *
     AVPacket *out=av_packet_alloc();if(!out)return AVERROR(ENOMEM);
     int last=0,result=0;
     while((result=av_bsf_receive_packet(bsf,out))>=0){
+        if(g_diag_packet_samples<24){
+            char sample[320];
+            int64_t dts_us=out->dts==AV_NOPTS_VALUE?AV_NOPTS_VALUE:av_rescale_q(out->dts,tb,AV_TIME_BASE_Q);
+            int64_t pts_us=out->pts==AV_NOPTS_VALUE?AV_NOPTS_VALUE:av_rescale_q(out->pts,tb,AV_TIME_BASE_Q);
+            int64_t dur_us=out->duration>0?av_rescale_q(out->duration,tb,AV_TIME_BASE_Q):0;
+            snprintf(sample,sizeof(sample),"BSF_SAMPLE n=%ld tb=%d/%d pts=%lld dts=%lld duration=%lld pts_ms=%.3f dts_ms=%.3f duration_ms=%.3f size=%d",
+              g_diag_packet_samples,tb.num,tb.den,(long long)out->pts,(long long)out->dts,(long long)out->duration,
+              pts_us==AV_NOPTS_VALUE?-1.0:pts_us/1000.0,dts_us==AV_NOPTS_VALUE?-1.0:dts_us/1000.0,dur_us/1000.0,out->size);
+            log_line(sample);g_diag_packet_samples++;
+        }
         if(!feed_frame(out,tb,origin_us,clock_origin,&last)){
             char s[300];const char *e=NDL_DirectMediaGetError();
             snprintf(s,sizeof(s),"NDL_DirectVideoPlay failed frame=%ld size=%d rc=%d error=%s",
@@ -401,8 +412,9 @@ int main(void){
     if(video<0){log_line("No video stream found in MKV");goto fail_early;}
     AVStream *st=fmt->streams[video];
     if(st->codecpar->codec_id!=AV_CODEC_ID_HEVC){log_line("Selected video stream is not HEVC");goto fail_early;}
-    char meta[256];snprintf(meta,sizeof(meta),"MKV opened: %dx%d profile=%d time_base=%d/%d duration=%lld",
+    char meta[384];snprintf(meta,sizeof(meta),"MKV opened: %dx%d profile=%d time_base=%d/%d avg_frame_rate=%d/%d r_frame_rate=%d/%d duration=%lld",
       st->codecpar->width,st->codecpar->height,st->codecpar->profile,st->time_base.num,st->time_base.den,
+      st->avg_frame_rate.num,st->avg_frame_rate.den,st->r_frame_rate.num,st->r_frame_rate.den,
       (long long)fmt->duration);log_line(meta);
     AVBSFContext *bsf=NULL;
     /* Match the proven TV probe: Annex-B conversion plus an AUD before each access unit. */
@@ -411,6 +423,8 @@ int main(void){
     if(avcodec_parameters_copy(bsf->par_in,st->codecpar)<0){log_line("Cannot copy HEVC codec parameters into bitstream filter chain");av_bsf_free(&bsf);goto fail_early;}
     bsf->time_base_in=st->time_base;
     if(av_bsf_init(bsf)<0){log_line("Cannot initialize HEVC Annex-B + AUD filter chain");av_bsf_free(&bsf);goto fail_early;}
+    {char tbline[160];snprintf(tbline,sizeof(tbline),"BSF_TIME_BASE input=%d/%d output=%d/%d",
+      bsf->time_base_in.num,bsf->time_base_in.den,bsf->time_base_out.num,bsf->time_base_out.den);log_line(tbline);}
     log_line("HEVC filter chain enabled: Annex-B conversion + AUD insertion");
 
     setenv("EGL_PLATFORM","wayland",0);setenv("XDG_RUNTIME_DIR","/tmp/xdg",0);
@@ -440,9 +454,14 @@ int main(void){
                 int64_t first=packet->dts!=AV_NOPTS_VALUE?packet->dts:packet->pts;
                 origin_us=first==AV_NOPTS_VALUE?0:av_rescale_q(first,st->time_base,AV_TIME_BASE_Q);
             }
+            if(g_diag_packet_samples<12){
+                char sample[256];snprintf(sample,sizeof(sample),"DEMUX_SAMPLE n=%ld tb=%d/%d pts=%lld dts=%lld duration=%lld size=%d",
+                  g_diag_packet_samples,st->time_base.num,st->time_base.den,(long long)packet->pts,
+                  (long long)packet->dts,(long long)packet->duration,packet->size);log_line(sample);
+            }
             rc=av_bsf_send_packet(bsf,packet);
             if(rc<0){log_line("HEVC bitstream filter rejected packet");failed=1;av_packet_unref(packet);break;}
-            rc=drain_bsf(bsf,st->time_base,origin_us,&clock_origin,&frames);
+            rc=drain_bsf(bsf,bsf->time_base_out,origin_us,&clock_origin,&frames);
             if(rc<0){failed=1;av_packet_unref(packet);break;}
         }
         av_packet_unref(packet);
@@ -452,7 +471,7 @@ int main(void){
     else if(demux_rc==AVERROR_EOF)stop_reason="eof";
     if(!failed){
         av_bsf_send_packet(bsf,NULL);
-        if(drain_bsf(bsf,st->time_base,origin_us==AV_NOPTS_VALUE?0:origin_us,&clock_origin,&frames)<0)failed=1;
+        if(drain_bsf(bsf,bsf->time_base_out,origin_us==AV_NOPTS_VALUE?0:origin_us,&clock_origin,&frames)<0)failed=1;
     }
     av_packet_free(&packet);
     {char s[320];snprintf(s,sizeof(s),"Stream ended: frames=%ld LOADCOMPLETED=%s PLAYING=%s demux_rc=%d stop_reason=%s",
