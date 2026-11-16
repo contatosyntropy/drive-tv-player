@@ -1,6 +1,6 @@
 {
   "id": "com.syntropy.drivestreamplayer",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "vendor": "Syntropy Digital",
   "type": "native",
   "main": "drive-tv-native-stream-player",
