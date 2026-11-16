@@ -126,13 +126,13 @@ jobs:
               name = item.get("name", "")
               if name.lower().endswith(".mkv"):
                   all_mkv.append(item)
-              if "DICKHEAD" in name.upper() or "S02E02" in name.upper():
+              if "THE GREAT" in name.upper() and "S02E03" in name.upper() and name.lower().endswith(".mkv"):
                   matches.append(item)
           if not matches:
               examples = [item.get("name", "") for item in all_mkv[:30]]
-              raise SystemExit("No S02E02/Dickhead MKV found. MKV count=" +
+              raise SystemExit("The Great S02E03 MKV was not found. MKV count=" +
                                str(len(all_mkv)) + "; examples=" + repr(examples))
-          matches.sort(key=lambda item: ("DICKHEAD" in item.get("name", "").upper(),
+          matches.sort(key=lambda item: ("S02E03" in item.get("name", "").upper(),
                                          int(item.get("size", 0))), reverse=True)
           item = matches[0]
           safe_name = urllib.parse.quote(item["name"], safe="")
