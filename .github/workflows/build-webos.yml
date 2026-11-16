@@ -99,7 +99,7 @@ jobs:
                   url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(params)
                   try:
                       listing = subprocess.run(
-                          ["curl", "-fsSL", "--retry", "3", "--connect-timeout", "15",
+                          ["curl", "-fsSL", "--retry", "3", "--connect-timeout", "15", "--max-time", "30",
                            "-H", "Referer: " + worker + "/", url],
                           check=True, capture_output=True, text=True
                       )
@@ -136,7 +136,7 @@ jobs:
           header_path = Path("build/native-media-probe/source-headers.txt")
           try:
               download = subprocess.run(
-                  ["curl", "-fLsS", "--retry", "3", "--connect-timeout", "15",
+                  ["curl", "-fLsS", "--retry", "3", "--connect-timeout", "15", "--max-time", "120",
                    "-H", "Range: bytes=0-33554431", "-D", str(header_path),
                    "-o", str(output_path), "-w", "%{http_code}", media_url],
                   check=True, capture_output=True, text=True
