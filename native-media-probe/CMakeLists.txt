@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2)
+pkg_check_modules(CURL REQUIRED libcurl)
 pkg_check_modules(NDL_DIRECTMEDIA QUIET NDL_directmedia)
 
 if(NDL_DIRECTMEDIA_FOUND)
@@ -40,20 +41,24 @@ endif()
 add_executable(drive-tv-native-media-probe src/main.c)
 target_include_directories(drive-tv-native-media-probe PRIVATE
   ${SDL2_INCLUDE_DIRS}
+  ${CURL_INCLUDE_DIRS}
   ${NDL_INCLUDE_DIRS}
 )
 target_compile_options(drive-tv-native-media-probe PRIVATE
   ${SDL2_CFLAGS_OTHER}
   ${NDL_DIRECTMEDIA_CFLAGS_OTHER}
+  ${CURL_CFLAGS_OTHER}
   -Wno-error=deprecated-declarations
 )
 target_link_directories(drive-tv-native-media-probe PRIVATE
   ${SDL2_LIBRARY_DIRS}
+  ${CURL_LIBRARY_DIRS}
   ${NDL_LIBRARY_DIRS}
 )
 target_link_libraries(drive-tv-native-media-probe PRIVATE
   ${SDL2_LIBRARIES}
   ${NDL_LIBRARIES}
+  ${CURL_LIBRARIES}
   pthread
 )
 set_target_properties(drive-tv-native-media-probe PROPERTIES
