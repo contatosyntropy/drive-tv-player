@@ -70,26 +70,107 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$SDK/share/buildroot/toolchainfile.cmake" \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build/native-probe --parallel 2
-          # Generate a short H.264 elementary stream for the hardware decoder test.
+          # Fetch a bounded excerpt of the real S02E02 MKV from the configured Drive library.
           mkdir -p build/native-media-probe/package
-          ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=1280x720:rate=24' -t 5 -an -c:v libx264 -preset ultrafast -profile:v main -pix_fmt yuv420p -x264-params 'aud=1:keyint=48:min-keyint=48:scenecut=0:bframes=0' -f h264 build/native-media-probe/package/sample.h264
-          test -s build/native-media-probe/package/sample.h264
           python3 - <<'PY'
+          import json, re, urllib.parse, urllib.request
           from pathlib import Path
-          import re
-          p = Path("build/native-media-probe/package/sample.h264")
-          data = p.read_bytes()
+
+          config = Path("config.js").read_text()
+          folder = re.search(r'folderId:\\s*"([^"]+)"', config)
+          key = re.search(r'apiKey:\\s*"([^"]+)"', config)
+          if not folder or not key:
+              raise SystemExit("Drive configuration is incomplete.")
+          root_id, api_key = folder.group(1), key.group(1)
+          worker = "https://drive-tv-player.contatosyntropy.workers.dev"
+          visited, matches = set(), []
+
+          def children(parent):
+              token = ""
+              while True:
+                  params = {
+                      "q": f"'{parent}' in parents and trashed = false",
+                      "pageSize": "1000",
+                      "fields": "nextPageToken,files(id,name,mimeType,size)",
+                      "key": api_key
+                  }
+                  if token:
+                      params["pageToken"] = token
+                  url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(params)
+                  try:
+                      with urllib.request.urlopen(url, timeout=30) as response:
+                          payload = json.load(response)
+                  except Exception as exc:
+                      raise SystemExit("Google Drive listing failed: " + type(exc).__name__)
+                  for item in payload.get("files", []):
+                      if item.get("mimeType") == "application/vnd.google-apps.folder":
+                          if item["id"] not in visited:
+                              visited.add(item["id"])
+                              yield from children(item["id"])
+                      else:
+                          yield item
+                  token = payload.get("nextPageToken", "")
+                  if not token:
+                      break
+
+          for item in children(root_id):
+              name = item.get("name", "")
+              if "S02E02" in name.upper() and "DICKHEAD" in name.upper() and name.lower().endswith(".mkv"):
+                  matches.append(item)
+          if not matches:
+              raise SystemExit("The S02E02 Dickhead MKV was not found in the configured Drive folder.")
+          if len(matches) > 1:
+              matches.sort(key=lambda item: int(item.get("size", 0)), reverse=True)
+          item = matches[0]
+          safe_name = urllib.parse.quote(item["name"], safe="")
+          media_url = f"{worker}/api/video/{item['id']}/{safe_name}?key={urllib.parse.quote(api_key)}"
+          request = urllib.request.Request(media_url, headers={"Range": "bytes=0-67108863"})
+          try:
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  if response.status != 206:
+                      raise SystemExit(f"Worker did not honor the byte range (HTTP {response.status}).")
+                  data = response.read(64 * 1024 * 1024)
+                  content_range = response.headers.get("Content-Range", "")
+          except SystemExit:
+              raise
+          except Exception as exc:
+              raise SystemExit("Worker MKV range download failed: " + type(exc).__name__)
+          if not data:
+              raise SystemExit("The MKV range response was empty.")
+          Path("build/native-media-probe/source.mkv").write_bytes(data)
+          print(f"Retrieved {len(data)} bytes from the real Drive MKV ({content_range}).")
+          print("Selected source: " + item["name"])
+          PY
+          # Extract five seconds without re-encoding. Convert length-prefixed HEVC to Annex-B
+          # and insert AUD NAL units so the native feed can submit complete access units.
+          ffmpeg -hide_banner -loglevel warning -probesize 64M -analyzeduration 10M \
+            -i build/native-media-probe/source.mkv -map 0:v:0 -an -sn -dn -t 5 -c:v copy \
+            -bsf:v hevc_mp4toannexb,hevc_metadata=aud=insert -f hevc \
+            build/native-media-probe/package/sample.hevc || true
+          test -s build/native-media-probe/package/sample.hevc
+          ffprobe -v error -select_streams v:0 -show_entries stream=profile,width,height,pix_fmt,r_frame_rate \
+            -of json build/native-media-probe/source.mkv > build/native-media-probe/source-video.json
+          python3 - <<'PY'
+          import json, re
+          from pathlib import Path
+          meta = json.loads(Path("build/native-media-probe/source-video.json").read_text())
+          streams = meta.get("streams", [])
+          if not streams:
+              raise SystemExit("FFprobe could not identify the real MKV video stream.")
+          video = streams[0]
+          print("Real source video:", video)
+          if video.get("width") != 1920 or video.get("height") != 960:
+              raise SystemExit("Unexpected source dimensions; refusing to package a mismatched test.")
+          if "10" not in video.get("profile", ""):
+              raise SystemExit("The selected Drive video is not identified as HEVC Main 10.")
+          data = Path("build/native-media-probe/package/sample.hevc").read_bytes()
           starts = list(re.finditer(b"\\x00\\x00(?:\\x00)?\\x01", data))
-          nal_types = []
-          for m in starts:
-              header = m.end()
-              if header < len(data):
-                  nal_types.append(data[header] & 0x1f)
-          vcl = sum(1 for t in nal_types if 1 <= t <= 5)
-          aud = nal_types.count(9)
-          print(f"H.264 sample validation: {len(data)} bytes, {len(starts)} Annex-B NAL units, {vcl} VCL NALs, {aud} AUD markers")
-          if not starts or not vcl:
-              raise SystemExit("Generated sample.h264 has no parseable Annex-B video slices")
+          types = [(data[m.end()] >> 1) & 0x3f for m in starts if m.end() + 1 < len(data)]
+          vcl = sum(1 for t in types if t <= 31)
+          aud = types.count(35)
+          print(f"Real HEVC excerpt: {len(data)} bytes, {len(starts)} Annex-B NALs, {vcl} VCL NALs, {aud} AUDs")
+          if not starts or not vcl or not aud:
+              raise SystemExit("The extracted HEVC excerpt has no complete parseable access units.")
           PY
           cmake -S native-media-probe -B build/native-media-probe -DCMAKE_TOOLCHAIN_FILE="$SDK/share/buildroot/toolchainfile.cmake" -DCMAKE_BUILD_TYPE=Release
           cmake --build build/native-media-probe --parallel 2
