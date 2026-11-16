@@ -418,6 +418,18 @@ int main(int argc, char **argv) {
             .width = VIDEO_WIDTH,
             .height = VIDEO_HEIGHT,
             .type = NDL_VIDEO_TYPE_H264
+        },
+        /* DirectMedia v2 expects the PCM audio descriptor to be initialized
+         * even for a video-only stream. Keep type=0 to disable audio, but
+         * provide the remaining fields exactly as the upstream sample does. */
+        .audio = {
+            .pcm = {
+                .type = 0,
+                .format = NDL_DIRECTMEDIA_AUDIO_PCM_FORMAT_S16LE,
+                .layout = "interleaved",
+                .channelMode = "stereo",
+                .sampleRate = NDL_DIRECTMEDIA_AUDIO_PCM_SAMPLE_RATE_OF(48000)
+            }
         }
     };
     if (NDL_DirectMediaLoad(&info, media_callback) != 0) {
