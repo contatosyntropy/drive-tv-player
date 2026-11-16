@@ -25,6 +25,11 @@
 
 static volatile int g_load_completed = 0;
 static volatile int g_playing = 0;
+static int64_t g_feed_window_start = 0;
+static int64_t g_feed_call_total_ns = 0;
+static int64_t g_feed_call_max_ns = 0;
+static long g_feed_calls = 0;
+static long g_feed_retries = 0;
 
 static void log_line(const char *s) {
     const char *home = getenv("HOME");
@@ -262,9 +267,13 @@ static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t *clock
     if(*clock_origin==0)*clock_origin=monotonic_ns()-dts*1000LL;
     wait_until(*clock_origin+dts*1000LL);
     for(int i=0;i<MAX_FEED_RETRIES;i++){
+        int64_t call_start=monotonic_ns();
         int rc=NDL_DirectVideoPlay(p->data,(unsigned int)p->size,(long long)pts);
-        *last_rc=rc;if(rc==0)return 1;sleep_ns(FEED_BACKOFF_NS);
-    }return 0;
+        int64_t call_ns=monotonic_ns()-call_start;
+        g_feed_call_total_ns+=call_ns;if(call_ns>g_feed_call_max_ns)g_feed_call_max_ns=call_ns;
+        *last_rc=rc;if(rc==0){if(i>0)g_feed_retries+=i;return 1;}
+        sleep_ns(FEED_BACKOFF_NS);
+    }g_feed_retries+=MAX_FEED_RETRIES;return 0;
 }
 static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t *clock_origin,long *frames){
     AVPacket *out=av_packet_alloc();if(!out)return AVERROR(ENOMEM);
@@ -275,7 +284,17 @@ static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t *
             snprintf(s,sizeof(s),"NDL_DirectVideoPlay failed frame=%ld size=%d rc=%d error=%s",
               *frames,out->size,last,e?e:"(none)");log_line(s);av_packet_free(&out);return AVERROR(EIO);
         }
-        (*frames)++;av_packet_unref(out);
+        (*frames)++;
+        if(g_feed_window_start==0)g_feed_window_start=monotonic_ns();
+        g_feed_calls++;
+        if((*frames)%24==0){
+            int64_t now=monotonic_ns();double sec=(now-g_feed_window_start)/1e9;
+            char stat[320];snprintf(stat,sizeof(stat),"PERF frames=%ld window_fps=%.2f feed_avg_ms=%.3f feed_max_ms=%.3f retries=%ld packet_bytes=%d",
+              *frames,sec>0?24.0/sec:0.0,g_feed_calls?((double)g_feed_call_total_ns/g_feed_calls)/1e6:0.0,
+              (double)g_feed_call_max_ns/1e6,g_feed_retries,out->size);
+            log_line(stat);g_feed_window_start=now;g_feed_call_total_ns=0;g_feed_call_max_ns=0;g_feed_calls=0;g_feed_retries=0;
+        }
+        av_packet_unref(out);
     }
     av_packet_free(&out);return result==AVERROR(EAGAIN)||result==AVERROR_EOF?0:result;
 }
@@ -361,7 +380,7 @@ int main(void){
     {char s[256];snprintf(s,sizeof(s),"Stream ended: frames=%ld LOADCOMPLETED=%s PLAYING=%s read_rc=%d",
       frames,g_load_completed?"yes":"no",g_playing?"yes":"no",rc);log_line(s);}
     if(!frames)failed=1;
-    if(failed==1){char id[16]={0};int up=upload_log(id,sizeof(id));log_line(up?"Failure diagnostic uploaded":"Failure diagnostic upload failed");}
+    if(failed==1 || failed==2){char id[16]={0};int up=upload_log(id,sizeof(id));char d[160];snprintf(d,sizeof(d),"Playback diagnostic uploaded=%s id=%s",up?"yes":"no",up?id:"none");log_line(d);}
     if(failed==0){
         sleep_ns(1500000000LL);NDL_DirectMediaUnload();NDL_DirectMediaQuit();
         char id[16]={0};int up=upload_log(id,sizeof(id));(void)up;
