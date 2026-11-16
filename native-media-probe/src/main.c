@@ -308,7 +308,7 @@ static void resource_released(const char *type) {
 }
 
 /* NDL DirectMedia v2 reports LOADCOMPLETED (0x16) and PLAYING (0x1a)
- * asynchronously. Do not feed access units before LOADCOMPLETED. */
+ * asynchronously. Feed immediately after Load; LOADCOMPLETED is informational. */
 static volatile int g_load_completed = 0;
 static volatile int g_playing = 0;
 
@@ -607,10 +607,12 @@ int main(int argc, char **argv) {
         munmap(mapping, reader.size);
         return 11;
     }
-    /* NDL v2 may not emit LOADCOMPLETED until it has received initial video
-     * access units. Waiting for that event before feeding creates a deadlock.
-     * Match the upstream sample: Load() returning success is the signal to feed. */
-    render_stage(renderer, mode.w, mode.h, "NDL LOAD ACCEPTED", "FEEDING H264 FRAMES", 60);
+    /* The video is rendered on a hardware plane BEHIND the SDL window.
+     * The upstream sample clears the SDL surface to transparent once and then
+     * leaves it alone. Any opaque status screen here would hide the video. */
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+    SDL_RenderClear(renderer);
+    SDL_RenderPresent(renderer);
     log_line("STAGE 5: NDL LOAD accepted - feeding immediately; LOADCOMPLETED is informational");
 
     const uint8_t *unit = NULL;
@@ -660,9 +662,10 @@ int main(int argc, char **argv) {
         log_line(line);
         char detail[96];
         snprintf(detail, sizeof(detail), "%ld H264 FRAMES SUBMITTED", frames);
-        render_stage(renderer, mode.w, mode.h, "VIDEO FEED OK", detail, 100);
         log_line(g_load_completed ? "NDL LOADCOMPLETED observed during feed" :
-                                   "NDL LOADCOMPLETED not observed; feed completed anyway");
+                                   "NDL LOADCOMPLETED not observed during feed");
+        log_line(g_playing ? "NDL PLAYING event observed during feed" :
+                             "NDL PLAYING event NOT observed during feed");
     } else if (!failed) {
         log_line("No H.264 access units were parsed from sample.h264");
         failed = 1;
@@ -677,8 +680,11 @@ int main(int argc, char **argv) {
         show_failure_report(renderer, mode.w, mode.h, uploaded ? report_id : "");
     }
 
-    /* Keep the video plane visible long enough for a person to confirm playback. */
-    int64_t hold_until = monotonic_ns() + 15000000000LL;
+    /* Let the decoder drain while the SDL surface remains transparent.
+     * The five-second sample is paced in real time; allow another two seconds
+     * for the last decoded frames before unloading the hardware plane. */
+    log_line("Waiting up to 2 seconds for decoder drain; SDL surface remains transparent");
+    int64_t hold_until = monotonic_ns() + 2000000000LL;
     while (failed != 2 && monotonic_ns() < hold_until) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -692,8 +698,48 @@ int main(int argc, char **argv) {
         SDL_Delay(30);
     }
 
-    NDL_DirectMediaUnload();
-    NDL_DirectMediaQuit();
+    if (failed != 2) {
+        char summary[256];
+        snprintf(summary, sizeof(summary), "Final events: LOADCOMPLETED=%s PLAYING=%s frames=%ld",
+                 g_load_completed ? "yes" : "no", g_playing ? "yes" : "no", frames);
+        log_line(summary);
+        char report_id[16] = {0};
+        int uploaded = upload_diagnostic_log(report_id, sizeof(report_id));
+        log_line(uploaded ? "Successful-run diagnostic uploaded" : "Successful-run diagnostic upload failed");
+        NDL_DirectMediaUnload();
+        NDL_DirectMediaQuit();
+        SDL_SetRenderDrawColor(renderer, 8, 12, 22, 255);
+        SDL_RenderClear(renderer);
+        SDL_Color white = {245, 248, 255, 255};
+        SDL_Color cyan = {110, 205, 255, 255};
+        int scale = mode.w / 180;
+        if (scale < 3) scale = 3;
+        if (scale > 8) scale = 8;
+        draw_text(renderer, "MEDIA TEST FINISHED", mode.w / 2, mode.h / 3, scale, white);
+        draw_text(renderer, g_playing ? "PLAYING EVENT RECEIVED" : "NO PLAYING EVENT",
+                  mode.w / 2, mode.h / 2 - 25, scale, cyan);
+        if (uploaded) {
+            draw_text(renderer, "REPORT CODE", mode.w / 2, mode.h / 2 + 55, scale, white);
+            draw_text(renderer, report_id, mode.w / 2, mode.h / 2 + 105, scale + 2, cyan);
+            draw_text(renderer, "SEND CODE IN CHAT", mode.w / 2, mode.h / 2 + 165, scale, white);
+        } else {
+            draw_text(renderer, "REPORT UPLOAD FAILED", mode.w / 2, mode.h / 2 + 75, scale, cyan);
+        }
+        SDL_RenderPresent(renderer);
+        int64_t result_until = monotonic_ns() + 60000000000LL;
+        while (monotonic_ns() < result_until) {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_QUIT || (event.type == SDL_KEYDOWN &&
+                    (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_BACKSPACE ||
+                     event.key.keysym.sym == SDLK_q))) result_until = 0;
+            }
+            SDL_Delay(30);
+        }
+    } else {
+        NDL_DirectMediaUnload();
+        NDL_DirectMediaQuit();
+    }
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
