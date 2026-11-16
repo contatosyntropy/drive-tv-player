@@ -1,0 +1,10 @@
+{
+  "id": "com.syntropy.drivestreamplayer",
+  "version": "0.1.0",
+  "vendor": "Syntropy Digital",
+  "type": "native",
+  "main": "drive-tv-native-stream-player",
+  "title": "Drive TV Stream Player",
+  "icon": "icon.png",
+  "appDescription": "Reprodução direta de MKV do Google Drive via HTTP Range e NDL."
+}
