@@ -54,7 +54,7 @@ static size_t receive_upload_response(char *data, size_t size, size_t count, voi
     }
     memcpy(response->data + response->size, data, bytes);
     response->size += bytes;
-    response->data[response->size] = '\\0';
+    response->data[response->size] = '\0';
     return size * count;
 }
 
@@ -68,7 +68,7 @@ static int upload_diagnostic_log(char *report_id, size_t report_id_size) {
     char report[24001];
     size_t length = fread(report, 1, sizeof(report) - 1, file);
     fclose(file);
-    report[length] = '\\0';
+    report[length] = '\0';
     if (length == 0 || length >= sizeof(report) - 1) return 0;
 
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return 0;
@@ -99,12 +99,12 @@ static int upload_diagnostic_log(char *report_id, size_t report_id_size) {
 
     int ok = 0;
     if (code == CURLE_OK && status == 201) {
-        const char *field = strstr(response.data, "\\"id\\":\\"");
+        const char *field = strstr(response.data, "\"id\":\"");
         if (field) {
             field += 6;
             if (strlen(field) >= 8 && report_id_size >= 9) {
                 memcpy(report_id, field, 8);
-                report_id[8] = '\\0';
+                report_id[8] = '\0';
                 ok = 1;
             }
         }
@@ -115,6 +115,9 @@ static int upload_diagnostic_log(char *report_id, size_t report_id_size) {
     curl_global_cleanup();
     return ok;
 }
+
+static void draw_text(SDL_Renderer *renderer, const char *text, int center_x,
+                      int y, int scale, SDL_Color color);
 
 static void show_failure_report(SDL_Renderer *renderer, int width, int height,
                                 const char *report_id) {
