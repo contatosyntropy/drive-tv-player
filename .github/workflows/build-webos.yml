@@ -12,6 +12,7 @@ on:
       - "webos-app/**"
       - "native-probe/**"
       - "native-media-probe/**"
+      - "native-stream-player/**"
       - "desktop-probe/**"
       - ".github/workflows/build-webos.yml"
 
