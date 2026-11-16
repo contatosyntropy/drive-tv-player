@@ -254,7 +254,6 @@ jobs:
           cmake --build build/native-stream-player --parallel 2
           cp native-stream-player/appinfo.json build/native-stream-player/package/
           cp build/native-stream-player/drive-tv-native-stream-player build/native-stream-player/package/
-          cp build/native-stream-player/package/stream-url.txt build/native-stream-player/package/
           cp build/native-probe/package/icon.png build/native-stream-player/package/icon.png
           file build/native-stream-player/package/drive-tv-native-stream-player
           file build/native-probe/package/drive-tv-native-probe
