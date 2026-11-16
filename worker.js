@@ -187,23 +187,37 @@ export default {
         crypto.getRandomValues(random);
         const id = Array.from(random, byte => alphabet[byte % alphabet.length]).join("");
         const reportUrl = new URL("/api/probe-log/" + id, url.origin);
-        const cache = caches.default;
-        await cache.put(
-          new Request(reportUrl.toString(), { method: "GET" }),
-          new Response(report, {
-            status: 200,
-            headers: {
-              "Content-Type": "text/plain; charset=utf-8",
-              "Cache-Control": "public, max-age=86400",
-              "X-Content-Type-Options": "nosniff"
-            }
-          })
-        );
-        await cache.put(
-          new Request(new URL("/api/probe-log/latest-id", url.origin).toString()),
-          new Response(id, { headers: { "Cache-Control": "public, max-age=86400" } })
-        );
-        return new Response(JSON.stringify({ id, url: reportUrl.toString(), expiresIn: 86400 }), {
+        const storedReport = report + "\\nREPORT_ID=" + id;
+
+        // KV é compartilhado entre regiões/PoPs. O Cache API abaixo é mantido
+        // apenas como fallback temporário até o binding PROBE_LOGS ser criado.
+        if (env.PROBE_LOGS) {
+          await env.PROBE_LOGS.put("report:" + id, storedReport, { expirationTtl: 86400 });
+          await env.PROBE_LOGS.put("latest", id, { expirationTtl: 86400 });
+        } else {
+          const cache = caches.default;
+          await cache.put(
+            new Request(reportUrl.toString(), { method: "GET" }),
+            new Response(storedReport, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/plain; charset=utf-8",
+                "Cache-Control": "public, max-age=86400",
+                "X-Content-Type-Options": "nosniff"
+              }
+            })
+          );
+          await cache.put(
+            new Request(new URL("/api/probe-log/latest-id", url.origin).toString()),
+            new Response(id, { headers: { "Cache-Control": "public, max-age=86400" } })
+          );
+        }
+        return new Response(JSON.stringify({
+          id,
+          url: reportUrl.toString(),
+          storage: env.PROBE_LOGS ? "kv" : "cache-fallback",
+          expiresIn: 86400
+        }), {
           status: 201,
           headers: JSON_HEADERS
         });
@@ -213,9 +227,23 @@ export default {
     }
 
     if (url.pathname === "/api/probe-log/latest" && request.method === "GET") {
+      if (env.PROBE_LOGS) {
+        const id = await env.PROBE_LOGS.get("latest");
+        if (!id) return jsonError("Ainda não há diagnóstico recente.", 404);
+        const report = await env.PROBE_LOGS.get("report:" + id);
+        if (!report) return jsonError("Diagnóstico recente expirado ou ainda não sincronizado.", 404);
+        return new Response(report, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
+      }
       const cache = caches.default;
       const latest = await cache.match(new Request(new URL("/api/probe-log/latest-id", url.origin).toString()));
-      if (!latest) return jsonError("Ainda não há diagnóstico recente.", 404);
+      if (!latest) return jsonError("Ainda não há diagnóstico recente. O armazenamento compartilhado ainda não está configurado.", 404);
       const id = (await latest.text()).trim();
       const cached = await cache.match(new Request(new URL("/api/probe-log/" + id, url.origin).toString()));
       if (!cached) return jsonError("Diagnóstico recente expirado.", 404);
@@ -225,13 +253,19 @@ export default {
       }});
     }
 
-    const probeLogMatch = url.pathname.match(/^\/api\/probe-log\/([A-Z]{8})$/);
+    const probeLogMatch = url.pathname.match(/^\\/api\\/probe-log\\/([A-Z]{8})$/);
     if (probeLogMatch && request.method === "GET") {
-      const cached = await caches.default.match(
-        new Request(new URL("/api/probe-log/" + probeLogMatch[1], url.origin).toString())
-      );
-      if (!cached) return jsonError("Relatório não encontrado ou expirado.", 404);
-      return new Response(cached.body, {
+      let report = null;
+      if (env.PROBE_LOGS) {
+        report = await env.PROBE_LOGS.get("report:" + probeLogMatch[1]);
+      } else {
+        const cached = await caches.default.match(
+          new Request(new URL("/api/probe-log/" + probeLogMatch[1], url.origin).toString())
+        );
+        report = cached ? await cached.text() : null;
+      }
+      if (!report) return jsonError("Relatório não encontrado ou expirado.", 404);
+      return new Response(report, {
         status: 200,
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
