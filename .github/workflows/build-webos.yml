@@ -126,8 +126,8 @@ jobs:
               name = item.get("name", "")
               if name.lower().endswith(".mkv"):
                   all_mkv.append(item)
-                  if "DICKHEAD" in name.upper() or "S02E02" in name.upper():
-                      matches.append(item)
+              if "DICKHEAD" in name.upper() or "S02E02" in name.upper():
+                  matches.append(item)
           if not matches:
               examples = [item.get("name", "") for item in all_mkv[:30]]
               raise SystemExit("No S02E02/Dickhead MKV found. MKV count=" +
