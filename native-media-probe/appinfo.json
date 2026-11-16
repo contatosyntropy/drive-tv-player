@@ -1,10 +1,10 @@
 {
   "id": "com.syntropy.drivemediaprobe",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "vendor": "Syntropy Digital",
   "type": "native",
   "main": "drive-tv-native-media-probe",
   "title": "Drive TV Media Probe",
   "icon": "icon.png",
-  "appDescription": "Diagnóstico por etapas do decodificador de vídeo por hardware NDL DirectMedia."
+  "appDescription": "Diagnóstico NDL com envio temporário de relatórios para recuperação remota."
 }
