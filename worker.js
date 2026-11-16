@@ -208,7 +208,7 @@ export default {
       }
     }
 
-    const probeLogMatch = url.pathname.match(/^\\/api\\/probe-log\\/([A-Z]{8})$/);
+    const probeLogMatch = url.pathname.match(/^\/api\/probe-log\/([A-Z]{8})$/);
     if (probeLogMatch && request.method === "GET") {
       const cached = await caches.default.match(
         new Request(new URL("/api/probe-log/" + probeLogMatch[1], url.origin).toString())
