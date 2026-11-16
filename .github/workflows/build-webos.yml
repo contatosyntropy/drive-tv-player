@@ -177,8 +177,8 @@ jobs:
 
           cp native-media-probe/appinfo.json build/native-media-probe/package/
           cp build/native-media-probe/drive-tv-native-media-probe build/native-media-probe/package/
-          test -s build/native-media-probe/package/sample.h264
-          ls -lh build/native-media-probe/package/sample.h264
+          test -s build/native-media-probe/package/sample.hevc
+          ls -lh build/native-media-probe/package/sample.hevc
           mkdir -p build/native-probe/package
           cp native-probe/appinfo.json build/native-probe/package/
           cp build/native-probe/drive-tv-native-probe build/native-probe/package/
