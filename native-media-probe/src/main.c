@@ -458,42 +458,11 @@ int main(int argc, char **argv) {
         munmap(mapping, reader.size);
         return 11;
     }
-    render_stage(renderer, mode.w, mode.h, "WAITING FOR NDL", "LOAD COMPLETED EVENT", 55);
-    log_line("STAGE 4: NDL LOAD REQUESTED - waiting for asynchronous LOADCOMPLETED event");
-
-    /* Keep the native app alive and pump SDL while the TV's media pipeline loads. */
-    int64_t load_deadline = monotonic_ns() + 12000000000LL;
-    while (!g_load_completed && monotonic_ns() < load_deadline) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT ||
-                (event.type == SDL_KEYDOWN &&
-                 (event.key.keysym.sym == SDLK_ESCAPE ||
-                  event.key.keysym.sym == SDLK_BACKSPACE))) {
-                NDL_DirectMediaUnload();
-                SDL_DestroyRenderer(renderer);
-                SDL_DestroyWindow(window);
-                NDL_DirectMediaQuit();
-                SDL_Quit();
-                munmap(mapping, reader.size);
-                return 0;
-            }
-        }
-        SDL_Delay(20);
-    }
-    if (!g_load_completed) {
-        log_line("TIMEOUT: NDL did not report LOADCOMPLETED within 12 seconds");
-        show_failure(renderer, mode.w, mode.h, "NDL LOAD TIMEOUT");
-        NDL_DirectMediaUnload();
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        NDL_DirectMediaQuit();
-        SDL_Quit();
-        munmap(mapping, reader.size);
-        return 12;
-    }
-    render_stage(renderer, mode.w, mode.h, "NDL LOAD COMPLETE", "STARTING H264 DECODER", 70);
-    log_line("STAGE 5: NDL LOADCOMPLETED - feeding H.264 test pattern to TV hardware decoder");
+    /* NDL v2 may not emit LOADCOMPLETED until it has received initial video
+     * access units. Waiting for that event before feeding creates a deadlock.
+     * Match the upstream sample: Load() returning success is the signal to feed. */
+    render_stage(renderer, mode.w, mode.h, "NDL LOAD ACCEPTED", "FEEDING H264 FRAMES", 60);
+    log_line("STAGE 5: NDL LOAD accepted - feeding immediately; LOADCOMPLETED is informational");
 
     const uint8_t *unit = NULL;
     size_t unit_size = 0;
@@ -530,7 +499,11 @@ int main(int argc, char **argv) {
         char line[256];
         snprintf(line, sizeof(line), "NDL VIDEO FEED OK - %ld H.264 frames submitted", frames);
         log_line(line);
-        render_stage(renderer, mode.w, mode.h, "VIDEO FEED OK", "H264 FRAMES SUBMITTED", 100);
+        char detail[96];
+        snprintf(detail, sizeof(detail), "%ld H264 FRAMES SUBMITTED", frames);
+        render_stage(renderer, mode.w, mode.h, "VIDEO FEED OK", detail, 100);
+        log_line(g_load_completed ? "NDL LOADCOMPLETED observed during feed" :
+                                   "NDL LOADCOMPLETED not observed; feed completed anyway");
     } else if (!failed) {
         log_line("No H.264 access units were parsed from sample.h264");
         failed = 1;
