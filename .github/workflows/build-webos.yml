@@ -73,7 +73,7 @@ jobs:
           # Fetch a bounded excerpt of the real S02E02 MKV from the configured Drive library.
           mkdir -p build/native-media-probe/package
           python3 - <<'PY'
-          import json, re, urllib.parse, urllib.request
+          import json, re, urllib.error, urllib.parse, urllib.request
           from pathlib import Path
 
           config = Path("config.js").read_text()
@@ -100,8 +100,12 @@ jobs:
                   try:
                       with urllib.request.urlopen(url, timeout=30) as response:
                           payload = json.load(response)
+                  except urllib.error.HTTPError as exc:
+                      detail = exc.read().decode("utf-8", "replace")[:600].replace(api_key, "[redacted]")
+                      raise SystemExit(f"Google Drive API HTTP {exc.code}: {detail}")
                   except Exception as exc:
-                      raise SystemExit("Google Drive listing failed: " + type(exc).__name__)
+                      detail = repr(exc).replace(api_key, "[redacted]")
+                      raise SystemExit("Google Drive listing failed: " + detail[:600])
                   for item in payload.get("files", []):
                       if item.get("mimeType") == "application/vnd.google-apps.folder":
                           if item["id"] not in visited:
