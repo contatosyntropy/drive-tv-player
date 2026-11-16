@@ -50,6 +50,36 @@ static int64_t g_diag_late_max_ns = 0;
 static int64_t g_diag_duration_sum_us = 0;
 static long g_diag_timed_frames = 0;
 static long g_diag_packet_samples = 0;
+static long g_diag_missing_dts = 0;
+static long g_diag_pts_backwards = 0;
+static int64_t g_diag_previous_pts = AV_NOPTS_VALUE;
+
+static void hevc_packet_shape(const uint8_t *data, int size, char *out, size_t cap) {
+    int aud = 0, vcl = 0, first_slices = 0, other = 0;
+    char types[96] = "";
+    size_t used = 0;
+    for (int i = 0; i + 5 < size;) {
+        int prefix = 0;
+        if (data[i] == 0 && data[i+1] == 0 && data[i+2] == 1) prefix = 3;
+        else if (i + 6 < size && data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1) prefix = 4;
+        if (!prefix) { i++; continue; }
+        int n = i + prefix;
+        if (n + 1 >= size) break;
+        int type = (data[n] >> 1) & 0x3f;
+        if (type == 35) aud++;
+        else if (type <= 31) {
+            vcl++;
+            if (n + 2 < size && (data[n+2] & 0x80)) first_slices++;
+        } else other++;
+        if (used < sizeof(types) - 8) {
+            int wrote = snprintf(types + used, sizeof(types) - used, "%s%d", used ? "," : "", type);
+            if (wrote > 0) used += (size_t)wrote;
+        }
+        i = n + 2;
+    }
+    snprintf(out, cap, "nal_types=%s aud=%d vcl=%d first_slice_flags=%d other=%d", types[0] ? types : "none", aud, vcl, first_slices, other);
+}
+
 
 static void log_line(const char *s) {
     const char *home = getenv("HOME");
@@ -294,6 +324,10 @@ static void wait_until(int64_t target){int64_t now=monotonic_ns();if(target>now)
 static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t decode_time_us,int64_t *clock_origin,int *last_rc){
     int64_t pts_abs=p->pts==AV_NOPTS_VALUE?0:av_rescale_q(p->pts,tb,AV_TIME_BASE_Q);
     int64_t dts_abs=p->dts==AV_NOPTS_VALUE?pts_abs:av_rescale_q(p->dts,tb,AV_TIME_BASE_Q);
+    if (p->dts == AV_NOPTS_VALUE) g_diag_missing_dts++;
+    if (g_diag_previous_pts != AV_NOPTS_VALUE && p->pts != AV_NOPTS_VALUE &&
+        av_rescale_q(p->pts,tb,AV_TIME_BASE_Q) < g_diag_previous_pts) g_diag_pts_backwards++;
+    if (p->pts != AV_NOPTS_VALUE) g_diag_previous_pts = av_rescale_q(p->pts,tb,AV_TIME_BASE_Q);
     int64_t pts=pts_abs-origin_us;
     int64_t dts=decode_time_us;
     int64_t duration_us=p->duration>0?av_rescale_q(p->duration,tb,AV_TIME_BASE_Q):0;
@@ -339,9 +373,11 @@ static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t f
             int64_t dts_us=out->dts==AV_NOPTS_VALUE?AV_NOPTS_VALUE:av_rescale_q(out->dts,tb,AV_TIME_BASE_Q);
             int64_t pts_us=out->pts==AV_NOPTS_VALUE?AV_NOPTS_VALUE:av_rescale_q(out->pts,tb,AV_TIME_BASE_Q);
             int64_t dur_us=out->duration>0?av_rescale_q(out->duration,tb,AV_TIME_BASE_Q):0;
-            snprintf(sample,sizeof(sample),"BSF_SAMPLE n=%ld tb=%d/%d pts=%lld dts=%lld duration=%lld pts_ms=%.3f dts_ms=%.3f duration_ms=%.3f size=%d",
-              g_diag_packet_samples,tb.num,tb.den,(long long)out->pts,(long long)out->dts,(long long)out->duration,
-              pts_us==AV_NOPTS_VALUE?-1.0:pts_us/1000.0,dts_us==AV_NOPTS_VALUE?-1.0:dts_us/1000.0,dur_us/1000.0,out->size);
+            char shape[192]; hevc_packet_shape(out->data,out->size,shape,sizeof(shape));
+            snprintf(sample,sizeof(sample),"BSF_SAMPLE n=%ld tb=%d/%d pts=%lld dts=%lld dts_missing=%s duration=%lld pts_ms=%.3f dts_ms=%.3f duration_ms=%.3f size=%d flags=0x%x %s",
+              g_diag_packet_samples,tb.num,tb.den,(long long)out->pts,(long long)out->dts,
+              out->dts==AV_NOPTS_VALUE?"yes":"no",(long long)out->duration,
+              pts_us==AV_NOPTS_VALUE?-1.0:pts_us/1000.0,dts_us==AV_NOPTS_VALUE?-1.0:dts_us/1000.0,dur_us/1000.0,out->size,out->flags,shape);
             log_line(sample);g_diag_packet_samples++;
         }
         if(!feed_frame(out,tb,origin_us,(int64_t)(*frames)*frame_interval_us,clock_origin,&last)){
@@ -426,6 +462,8 @@ int main(void){
     {char tbline[160];snprintf(tbline,sizeof(tbline),"BSF_TIME_BASE input=%d/%d output=%d/%d",
       bsf->time_base_in.num,bsf->time_base_in.den,bsf->time_base_out.num,bsf->time_base_out.den);log_line(tbline);}
     log_line("HEVC filter chain enabled: Annex-B conversion + AUD insertion");
+    { char x[192]; snprintf(x,sizeof(x),"HEVC_CODEC_DIAGNOSTIC profile=%d level=%d format=%d bits_per_raw_sample=%d extradata_size=%d",
+        st->codecpar->profile,st->codecpar->level,st->codecpar->format,st->codecpar->bits_per_raw_sample,st->codecpar->extradata_size); log_line(x); }
 
     setenv("EGL_PLATFORM","wayland",0);setenv("XDG_RUNTIME_DIR","/tmp/xdg",0);
     if(SDL_Init(0)!=0||SDL_InitSubSystem(SDL_INIT_VIDEO)!=0){log_line(SDL_GetError());av_bsf_free(&bsf);goto fail_early;}
@@ -458,10 +496,11 @@ int main(void){
                 int64_t first=packet->dts!=AV_NOPTS_VALUE?packet->dts:packet->pts;
                 origin_us=first==AV_NOPTS_VALUE?0:av_rescale_q(first,st->time_base,AV_TIME_BASE_Q);
             }
-            if(g_diag_packet_samples<12){
-                char sample[256];snprintf(sample,sizeof(sample),"DEMUX_SAMPLE n=%ld tb=%d/%d pts=%lld dts=%lld duration=%lld size=%d",
+            if(g_diag_packet_samples<48){
+                char sample[320];snprintf(sample,sizeof(sample),"DEMUX_SAMPLE n=%ld tb=%d/%d pts=%lld dts=%lld dts_missing=%s duration=%lld size=%d flags=0x%x",
                   g_diag_packet_samples,st->time_base.num,st->time_base.den,(long long)packet->pts,
-                  (long long)packet->dts,(long long)packet->duration,packet->size);log_line(sample);
+                  (long long)packet->dts,packet->dts==AV_NOPTS_VALUE?"yes":"no",
+                  (long long)packet->duration,packet->size,packet->flags);log_line(sample);
             }
             rc=av_bsf_send_packet(bsf,packet);
             if(rc<0){log_line("HEVC bitstream filter rejected packet");failed=1;av_packet_unref(packet);break;}
