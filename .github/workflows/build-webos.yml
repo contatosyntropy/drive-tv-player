@@ -121,14 +121,19 @@ jobs:
                   if not token:
                       break
 
+          all_mkv = []
           for item in children(root_id):
               name = item.get("name", "")
-              if "S02E02" in name.upper() and "DICKHEAD" in name.upper() and name.lower().endswith(".mkv"):
-                  matches.append(item)
+              if name.lower().endswith(".mkv"):
+                  all_mkv.append(item)
+                  if "DICKHEAD" in name.upper() or "S02E02" in name.upper():
+                      matches.append(item)
           if not matches:
-              raise SystemExit("The S02E02 Dickhead MKV was not found in the configured Drive folder.")
-          if len(matches) > 1:
-              matches.sort(key=lambda item: int(item.get("size", 0)), reverse=True)
+              examples = [item.get("name", "") for item in all_mkv[:30]]
+              raise SystemExit("No S02E02/Dickhead MKV found. MKV count=" +
+                               str(len(all_mkv)) + "; examples=" + repr(examples))
+          matches.sort(key=lambda item: ("DICKHEAD" in item.get("name", "").upper(),
+                                         int(item.get("size", 0))), reverse=True)
           item = matches[0]
           safe_name = urllib.parse.quote(item["name"], safe="")
           media_url = f"{worker}/api/video/{item['id']}/{safe_name}?key={urllib.parse.quote(api_key)}"
