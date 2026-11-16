@@ -474,6 +474,11 @@ int main(int argc, char **argv) {
         failed = 1;
     }
 
+    if (failed == 1) {
+        log_line("STAGE ERROR: video access-unit submission failed");
+        show_failure(renderer, mode.w, mode.h, "VIDEO FEED FAILED");
+    }
+
     /* Keep the video plane visible long enough for a person to confirm playback. */
     int64_t hold_until = monotonic_ns() + 15000000000LL;
     while (failed != 2 && monotonic_ns() < hold_until) {
