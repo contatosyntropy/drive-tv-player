@@ -77,8 +77,8 @@ jobs:
           from pathlib import Path
 
           config = Path("config.js").read_text()
-          folder = re.search(r'folderId:\\s*"([^"]+)"', config)
-          key = re.search(r'apiKey:\\s*"([^"]+)"', config)
+          folder = re.search(r'folderId:\s*"([^"]+)"', config)
+          key = re.search(r'apiKey:\s*"([^"]+)"', config)
           if not folder or not key:
               raise SystemExit("Drive configuration is incomplete.")
           root_id, api_key = folder.group(1), key.group(1)
