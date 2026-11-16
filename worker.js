@@ -243,7 +243,7 @@ export default {
       return jsonError("Armazenamento de diagnósticos não configurado.", 503);
     }
 
-    const probeLogMatch = url.pathname.match(/^\\/api\\/probe-log\\/([A-Z]{8})$/);
+    const probeLogMatch = url.pathname.match(/^\/api\/probe-log\/([A-Z]{8})$/);
     if (probeLogMatch && request.method === "GET") {
       let report = null;
       if (env.PROBE_LOG_STORE) {
