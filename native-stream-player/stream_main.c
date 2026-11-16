@@ -357,7 +357,8 @@ static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t decode
     wait_until(target_ns);
     for(int i=0;i<MAX_FEED_RETRIES;i++){
         int64_t call_start=monotonic_ns();
-        int rc=NDL_DirectVideoPlay(p->data,(unsigned int)p->size,(long long)pts);
+        /* DirectMedia v2 expects PTS in milliseconds since load, not microseconds. */
+        int rc=NDL_DirectVideoPlay(p->data,(unsigned int)p->size,(long long)(pts/1000LL));
         int64_t call_ns=monotonic_ns()-call_start;
         g_feed_call_total_ns+=call_ns;if(call_ns>g_feed_call_max_ns)g_feed_call_max_ns=call_ns;
         *last_rc=rc;if(rc==0){if(i>0)g_feed_retries+=i;return 1;}
