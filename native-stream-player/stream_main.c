@@ -431,6 +431,7 @@ static int read_stream_url(char *url,size_t cap){
 int main(void){
     const char *home=getenv("HOME");char logpath[512];snprintf(logpath,sizeof(logpath),"%s%s",home?home:"/tmp",LOG_PATH_SUFFIX);unlink(logpath);
     log_line("=== DIRECT GOOGLE DRIVE MKV STREAM START ===");
+    log_line("BUILD_DIAGNOSTIC version=0.1.2 source=stream_main.c");
     char url[4096];if(!read_stream_url(url,sizeof(url))){log_line("stream-url.txt missing or invalid");return 2;}
     if(!strstr(url,"/api/video/")||!strstr(url,"?key=")){log_line("stream URL must be a Worker /api/video URL with key");return 2;}
     if(curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK){log_line("curl global init failed");return 3;}
