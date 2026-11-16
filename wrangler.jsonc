@@ -3,6 +3,14 @@
   "name": "drive-tv-player",
   "main": "./worker.js",
   "compatibility_date": "2026-11-14",
+  "durable_objects": {
+    "bindings": [
+      { "name": "PROBE_LOG_STORE", "class_name": "ProbeLogStore" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1-probe-log-store", "new_sqlite_classes": ["ProbeLogStore"] }
+  ],
   "kv_namespaces": [
     {
       "binding": "PROBE_LOGS",
