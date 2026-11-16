@@ -1,3 +1,4 @@
+// Deploy trigger: ensure PROBE_LOGS KV binding configuration is picked up.
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
