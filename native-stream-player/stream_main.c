@@ -134,7 +134,7 @@ static int avio_read_packet(void *opaque,uint8_t *buf,int buf_size){
     if(r->file_size>0 && (int64_t)n>r->file_size-r->position)n=(size_t)(r->file_size-r->position);
     memcpy(buf,r->cache+offset,n);r->position+=(int64_t)n;return (int)n;
 }
-static int64_t avio_seek(void *opaque,int64_t offset,int whence){
+static int64_t range_seek_cb(void *opaque,int64_t offset,int whence){
     RangeReader *r=opaque;
     if(whence==AVSEEK_SIZE)return r->file_size>0?r->file_size:AVERROR(ENOSYS);
     whence &= ~AVSEEK_FORCE;
@@ -193,7 +193,7 @@ int main(void){
     RangeReader rr={0};rr.url=url;rr.cache=malloc(RANGE_CHUNK);rr.file_size=-1;rr.cache_start=-1;rr.curl=curl_easy_init();
     if(!rr.cache||!rr.curl){log_line("Cannot initialize HTTP Range reader");if(rr.curl)curl_easy_cleanup(rr.curl);curl_global_cleanup();free(rr.cache);return 3;}
     AVFormatContext *fmt=avformat_alloc_context();uint8_t *avio_buf=av_malloc(AVIO_BUFFER);
-    AVIOContext *avio=avio_alloc_context(avio_buf,AVIO_BUFFER,0,&rr,avio_read_packet,NULL,avio_seek);
+    AVIOContext *avio=avio_alloc_context(avio_buf,AVIO_BUFFER,0,&rr,avio_read_packet,NULL,range_seek_cb);
     if(!fmt||!avio){log_line("Cannot allocate FFmpeg custom AVIO");return 4;}
     fmt->pb=avio;fmt->flags|=AVFMT_FLAG_CUSTOM_IO;
     log_line("Opening Matroska over HTTP Range...");
