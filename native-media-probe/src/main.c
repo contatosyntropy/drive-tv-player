@@ -424,7 +424,7 @@ static int load_sample(const char *path, hevc_reader *reader, void **mapping) {
     *mapping = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     if (*mapping == MAP_FAILED) {
-        log_line("Cannot map sample.h264 into memory");
+        log_line("Cannot map sample.hevc into memory");
         return 0;
     }
     reader->data = (const uint8_t *)*mapping;
