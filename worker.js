@@ -1,6 +1,6 @@
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Range, If-Range, Content-Type",
   "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range, Content-Type, Content-Encoding, ETag, Last-Modified"
 };
@@ -175,6 +175,54 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/probe-log" && request.method === "POST") {
+      try {
+        const report = await request.text();
+        if (!report || report.length > 24000) {
+          return jsonError("Relatório vazio ou maior que 24 KB.", 413);
+        }
+        const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+        const random = new Uint8Array(8);
+        crypto.getRandomValues(random);
+        const id = Array.from(random, byte => alphabet[byte % alphabet.length]).join("");
+        const reportUrl = new URL("/api/probe-log/" + id, url.origin);
+        const cache = caches.default;
+        await cache.put(
+          new Request(reportUrl.toString(), { method: "GET" }),
+          new Response(report, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "Cache-Control": "public, max-age=86400",
+              "X-Content-Type-Options": "nosniff"
+            }
+          })
+        );
+        return new Response(JSON.stringify({ id, url: reportUrl.toString(), expiresIn: 86400 }), {
+          status: 201,
+          headers: JSON_HEADERS
+        });
+      } catch (error) {
+        return jsonError("Não foi possível armazenar o diagnóstico: " + error.message, 500);
+      }
+    }
+
+    const probeLogMatch = url.pathname.match(/^\\/api\\/probe-log\\/([A-Z]{8})$/);
+    if (probeLogMatch && request.method === "GET") {
+      const cached = await caches.default.match(
+        new Request(new URL("/api/probe-log/" + probeLogMatch[1], url.origin).toString())
+      );
+      if (!cached) return jsonError("Relatório não encontrado ou expirado.", 404);
+      return new Response(cached.body, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff"
+        }
+      });
+    }
 
     if (url.pathname.startsWith("/api/")) {
       if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
