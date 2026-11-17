@@ -264,13 +264,7 @@
     }
   }
 
-  function nativeSubtitleUrl(file) {
-    const path = "/api/subtitle/" + encodeURIComponent(file.id) + "/" +
-      encodeURIComponent(file.name || "subtitle.srt");
-    return apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
-  }
-
-  function nativePlayerPayload(file, sourceUrl, subtitleFile = null) {
+  function nativePlayerPayload(file, sourceUrl) {
     const extension = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
     const mimeByExtension = {
       mkv: "video/x-matroska", mp4: "video/mp4", m4v: "video/mp4",
@@ -278,7 +272,7 @@
       mpg: "video/mpeg", mpeg: "video/mpeg", ts: "video/mp2t"
     };
     const mime = mimeByExtension[extension] || file.mimeType || "application/octet-stream";
-    const payload = {
+    return {
       fullPath: new URL(sourceUrl, window.location.href).href,
       artist: "", subtitle: "",
       dlnaInfo: {
@@ -292,19 +286,6 @@
       fileName: file.name.replace(/\.[^.]+$/, ""),
       lastPlayPosition: -1
     };
-
-    // Sidecar SRT/VTT: o Media Discovery recebe a URI no bloco option.subtitle.
-    // Essa interface é não documentada e precisa ser validada na TV.
-    if (subtitleFile) {
-      payload.option = {
-        subtitle: {
-          uri: nativeSubtitleUrl(subtitleFile),
-          languageCode: "pt",
-          show: true
-        }
-      };
-    }
-    return payload;
   }
 
   async function diagnoseMediaDelivery(sourceUrl, file) {
@@ -365,8 +346,8 @@
     return { details: result, summary: lines.join("\n") };
   }
 
-  function launchNativePlayer(file, sourceUrl, subtitleFile = null) {
-    const payload = nativePlayerPayload(file, sourceUrl, subtitleFile);
+  function launchNativePlayer(file, sourceUrl) {
+    const payload = nativePlayerPayload(file, sourceUrl);
     const params = { payload: [payload] };
     if (window.webOS && window.webOS.service && typeof window.webOS.service.request === "function") {
       return new Promise(resolve => {
@@ -450,16 +431,13 @@
       setPlaybackMessage("Abrindo o player nativo da LG…");
 
       try {
-        const subtitleFile = findSubtitle(file);
-        const nativeResult = await launchNativePlayer(file, sourceUrl, subtitleFile);
+        const nativeResult = await launchNativePlayer(file, sourceUrl);
         if (nativeResult.ok) {
           // O Media Discovery assume a reprodução; o app permanece pronto
           // para ser retomado quando o usuário sair do player da TV.
           player.classList.add("hidden");
           document.getElementById("library").classList.remove("hidden");
-          status.textContent = subtitleFile
-            ? "Player nativo da LG aberto • legenda enviada: " + subtitleFile.name
-            : "Player nativo da LG aberto • sem legenda externa correspondente";
+          status.textContent = "Player nativo da LG aberto";
           return;
         }
 
