@@ -681,11 +681,18 @@
 
   async function diagnosePlaybackFailure(file, sessionToken) {
     if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
+    clearTimeout(startupWatchdog);
     const mediaError = video.error;
-    const errorCode = mediaError ? mediaError.code : 0;
+    const errorCode = mediaError ? mediaError.code : null;
     const errorNames = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK", 3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED" };
     const browserMessage = mediaError && mediaError.message ? mediaError.message : "";
-    showToast("Código " + (errorCode || "desconhecido") + " — analisando MKV e conexão…", true);
+    const attemptNames = {
+      1: "Tentativa 1: source video/mp4 + Content-Type video/x-matroska",
+      2: "Tentativa 2: source video/mp4 + Content-Type application/octet-stream",
+      3: "Tentativa 3: source video/x-matroska + Content-Type video/x-matroska",
+      4: "Tentativa 4: video.src direto + Content-Type video/x-matroska"
+    };
+    showToast("Analisando resposta do servidor e contêiner…", true);
     const report = await inspectMkvMedia(file);
     if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
     const videoTrack = report.videoTracks[0];
@@ -701,30 +708,28 @@
     } else codecParts.push("Vídeo: faixa não identificada");
     if (audioTrack) codecParts.push("Áudio: " + (audioTrack.codec || "codec não identificado"));
     else codecParts.push("Áudio: faixa não identificada");
-    let diagnosis = "";
-    if (videoTrack && /V_MPEG4\/ISO\/AVC/i.test(videoTrack.codec) && videoTrack.avcProfile === 110) {
-      diagnosis = "H.264 High 10 / Hi10P (10-bit): incompatível com a decodificação H.264 por hardware da TV. ";
-    } else if (videoTrack && /V_MPEGH\/ISO\/HEVC/i.test(videoTrack.codec)) {
-      diagnosis = "Vídeo HEVC/H.265 detectado; perfil, nível e profundidade podem exceder o suporte do modelo. ";
-    } else if (videoTrack && /V_AV1/i.test(videoTrack.codec)) {
-      diagnosis = "AV1 detectado; não presumir suporte por hardware neste modelo webOS 6. ";
-    }
+
     const networkParts = [];
     if (report.httpStatus) networkParts.push("HTTP " + report.httpStatus);
     if (report.httpError) networkParts.push("Resposta do servidor: " + report.httpError);
     if (report.networkError) networkParts.push("Rede: " + report.networkError);
-    if (!networkParts.length) networkParts.push("Rede: inspeção respondeu; " + report.bytesRead + " bytes lidos");
+    if (!networkParts.length) networkParts.push("HTTP não verificado");
+    const failureLabel = mediaError
+      ? (errorNames[errorCode] || "Falha de reprodução") + " (código " + errorCode + ")"
+      : "falha do elemento <source> sem MediaError";
     const details = [
-      diagnosis + "Falha " + (errorNames[errorCode] || "de reprodução") + " (código " + (errorCode || "?") + ").",
+      attemptNames[playbackAttempt] || ("Tentativa " + playbackAttempt),
+      failureLabel,
       codecParts.join(" | "),
       networkParts.join(" | "),
-      "MIME: " + (report.contentType || "não informado"),
-      browserMessage ? "video.error.message: " + browserMessage : "video.error.message: indisponível no webOS"
+      "Content-Type HTTP: " + (report.contentType || "não informado"),
+      browserMessage ? "video.error.message: " + browserMessage : "video.error.message: não fornecida pela webOS"
     ];
     showToast(details.join(" — "), true);
     showHud();
     console.error("[Drive TV Player] Diagnóstico de reprodução", {
-      file: file.name, errorCode, errorName: errorNames[errorCode] || "unknown",
+      file: file.name, attempt: playbackAttempt, errorCode,
+      errorName: errorNames[errorCode] || (mediaError ? "unknown" : "source-error"),
       videoErrorMessage: browserMessage, httpStatus: report.httpStatus,
       httpError: report.httpError, networkError: report.networkError,
       contentType: report.contentType, bytesRead: report.bytesRead,
@@ -786,7 +791,6 @@
     fallbackTransitionPending = true;
     clearTimeout(fallbackTransitionTimer);
 
-    // Verifica a cota antes de alternar MIME ou iniciar outra tentativa.
     checkDriveQuota(file).then(quota => {
       if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
       if (quota.exceeded) {
@@ -794,21 +798,21 @@
         return;
       }
 
-      fallbackTransitionTimer = setTimeout(() => { fallbackTransitionPending = false; }, 1200);
-      const isMkv = /\\.mkv$/i.test(file.name || "");
-      if (isWebOS() && isMkv && failedAttempt < 3) {
+      const isMkv = /\.mkv$/i.test(file.name || "");
+      const maxAttempts = isWebOS() && isMkv ? 4 : 2;
+      if (failedAttempt < maxAttempts) {
+        fallbackTransitionTimer = setTimeout(() => { fallbackTransitionPending = false; }, 1200);
         startStreamAttempt(file, failedAttempt + 1, sessionToken);
-        return;
+      } else {
+        fallbackTransitionPending = false;
+        clearTimeout(startupWatchdog);
+        diagnosePlaybackFailure(file, sessionToken);
       }
-      if (failedAttempt < 2) {
-        startStreamAttempt(file, failedAttempt + 1, sessionToken);
-        return;
-      }
-      clearTimeout(startupWatchdog);
-      diagnosePlaybackFailure(file, sessionToken);
     }).catch(error => {
       console.warn("[Drive TV Player] Falha ao verificar cota do Drive:", error);
       fallbackTransitionPending = false;
+      clearTimeout(startupWatchdog);
+      diagnosePlaybackFailure(file, sessionToken);
     });
   }
 
@@ -816,31 +820,43 @@
     if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
     playbackAttempt = attempt;
     resetVideoSources();
+
     const isMkv = /\.mkv$/i.test(file.name || "");
-    const isWebOsMkv = isWebOS() && isMkv;
-    const sourceAttempt = isWebOS() && (attempt === 1 || (isWebOsMkv && attempt === 2));
-    if (sourceAttempt) {
+    const useUms = isWebOS() && isMkv;
+    if (useUms && attempt >= 1 && attempt <= 3) {
       const source = document.createElement("source");
-      let sourceType = "video/mp4";
-      let sourceUrl = videoSourceUrl(file);
-      if (isWebOsMkv && attempt === 1) sourceType = "video/x-matroska";
-      else if (isWebOsMkv && attempt === 2) {
+      let sourceUrl;
+      let sourceType;
+
+      if (attempt === 1) {
+        // UMS: filtro Chromium reconhece MP4; cabeçalho HTTP abre demuxador Matroska.
+        sourceUrl = videoSourceUrl(file, "mkv");
         sourceType = "video/mp4";
+      } else if (attempt === 2) {
+        // Mantém o MIME MP4 no source, mas deixa o UMS detectar o contêiner pelos bytes.
         sourceUrl = videoSourceUrl(file, "octet");
+        sourceType = "video/mp4";
+      } else {
+        sourceUrl = videoSourceUrl(file, "mkv");
+        sourceType = "video/x-matroska";
       }
+
       source.setAttribute("src", sourceUrl);
       source.setAttribute("type", sourceType + ";mediaOption=" + buildWebOSMediaOption());
       source.addEventListener("error", () => triggerNextAttempt(file, sessionToken, attempt));
       video.appendChild(source);
       video.load();
     } else {
-      video.src = videoSourceUrl(file);
+      // Tentativa 4: video.src direto com Content-Type Matroska (ou fallback padrão para outros formatos).
+      video.src = videoSourceUrl(file, useUms ? "mkv" : "");
       video.load();
     }
+
     startupWatchdog = setTimeout(() => {
       if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
       if (video.readyState === 0) triggerNextAttempt(file, sessionToken, attempt);
     }, 6500);
+
     video.play().then(() => {
       if (sessionToken !== playbackSessionToken) return;
       if (video.readyState >= 3) showToast("");
