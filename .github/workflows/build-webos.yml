@@ -60,6 +60,16 @@ jobs:
           ares-config --profile tv
           ares-package --no-minify --outdir dist/web-app ./build/webos-app
 
+          test -n "$(find dist/web-app -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+
+      - name: Upload webOS player package
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-tv-player-webos-ipk
+          path: dist/web-app/*.ipk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Build native ARM probe
         run: |
           sudo apt-get update
@@ -276,14 +286,6 @@ jobs:
           test -n "$(find dist/web-app -maxdepth 1 -type f -name '*.ipk' -print -quit)"
           test -n "$(find dist/native-probe -maxdepth 1 -type f -name '*.ipk' -print -quit)"
           test -n "$(find dist/native-media-probe -maxdepth 1 -type f -name '*.ipk' -print -quit)"
-
-      - name: Upload webOS player package
-        uses: actions/upload-artifact@v4
-        with:
-          name: drive-tv-player-webos-ipk
-          path: dist/web-app/*.ipk
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Upload native ARM probe package
         uses: actions/upload-artifact@v4
