@@ -84,7 +84,8 @@ async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
       };
       if (mimeOverride === "matroska") {
         responseHeaders.set("Content-Type", "video/x-matroska");
-      } else if (mimeTypes[extension]) {
+      } else if (mimeOverride === "mp4") {
+        responseHeaders.set("Content-Type", "video/mp4");      } else if (mimeTypes[extension]) {
         responseHeaders.set("Content-Type", mimeTypes[extension]);
       }
       responseHeaders.set("Accept-Ranges", "bytes");
