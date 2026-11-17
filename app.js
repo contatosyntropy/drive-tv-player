@@ -420,20 +420,36 @@
       playerHistoryActive = true;
     }
 
-    if (isTvMkv && typeof window.playMkvOnTv === "function") {
+    if (isTvMkv) {
       preview.classList.add("hidden");
-      video.classList.remove("hidden");
-      video.controls = true;
+      video.classList.add("hidden");
       video.pause();
       video.removeAttribute("src");
       video.load();
-      setPlaybackMessage("Preparando conversão experimental na própria TV…");
+
+      const sourceUrl = videoSourceUrl(file);
+      setPlaybackMessage("Abrindo o player nativo da LG…");
+
       try {
-        await loadSubtitle(file);
-        await window.playMkvOnTv(file, videoSourceUrl(file));
+        const nativeResult = await launchNativePlayer(file, sourceUrl);
+        if (nativeResult.ok) {
+          // O Media Discovery assume a reprodução; o app permanece pronto
+          // para ser retomado quando o usuário sair do player da TV.
+          player.classList.add("hidden");
+          document.getElementById("library").classList.remove("hidden");
+          status.textContent = "Player nativo da LG aberto";
+          return;
+        }
+
+        const reason = nativeResult.error?.errorText ||
+          nativeResult.error?.message ||
+          (nativeResult.unavailable ? "API webOS indisponível" : "erro não identificado");
+        setPlaybackMessage("A TV não aceitou abrir o player nativo: " + reason);
+        status.textContent = "Falha ao abrir player nativo";
       } catch (error) {
-        console.error("Conversão experimental na TV falhou:", error);
-        setPlaybackMessage("Não foi possível converter este MKV na TV: " + (error.message || error));
+        console.error("Falha ao abrir o player nativo:", error);
+        setPlaybackMessage("Não foi possível abrir o player nativo da LG: " + (error.message || error));
+        status.textContent = "Falha ao abrir player nativo";
       }
       return;
     }
