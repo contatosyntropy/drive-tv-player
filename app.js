@@ -4,7 +4,15 @@
   const message = document.getElementById("message");
   const status = document.getElementById("status");
   const player = document.getElementById("player");
+  const playerOverlay = document.getElementById("player-overlay");
   const video = document.getElementById("video");
+  const preview = document.getElementById("drive-preview");
+  const nowPlaying = document.getElementById("now-playing");
+  const toggleSubtitleBtn = document.getElementById("toggle-subtitle");
+  const nextEpisodeBtn = document.getElementById("next-episode");
+  const fallbackDriveBtn = document.getElementById("fallback-drive");
+  const playbackMessage = document.getElementById("playback-message");
+
   const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
   const subtitlePattern = /\.(srt|vtt)$/i;
 
@@ -13,9 +21,13 @@
   let folders = [];
   let currentFolderId = config.folderId;
   let visibleVideos = [];
+  let currentVideoIndex = -1;
+  let usingDriveFallback = false;
   let subtitleUrl = null;
   let subtitleLoadToken = 0;
   let playerHistoryActive = false;
+  let overlayTimer = null;
+  let messageTimer = null;
 
   const formatSize = bytes => {
     if (!bytes) return "";
@@ -25,7 +37,39 @@
     return n.toFixed(i ? 1 : 0) + " " + units[i];
   };
 
-  function setMessage(text) { message.textContent = text; }
+  function setMessage(text) {
+    message.textContent = text;
+  }
+
+  function setPlaybackMessage(text, persistent = false) {
+    if (!playbackMessage) return;
+    clearTimeout(messageTimer);
+    if (!text) {
+      playbackMessage.textContent = "";
+      playbackMessage.classList.add("hidden");
+      return;
+    }
+    playbackMessage.textContent = text;
+    playbackMessage.classList.remove("hidden");
+    if (!persistent) {
+      messageTimer = setTimeout(() => {
+        playbackMessage.classList.add("hidden");
+      }, 4500);
+    }
+  }
+
+  function showOverlayTemporarily() {
+    if (!playerOverlay) return;
+    playerOverlay.classList.remove("autohide");
+    clearTimeout(overlayTimer);
+    if (!usingDriveFallback && !video.paused) {
+      overlayTimer = setTimeout(() => {
+        if (!player.classList.contains("hidden") && !video.paused && !usingDriveFallback) {
+          playerOverlay.classList.add("autohide");
+        }
+      }, 4000);
+    }
+  }
 
   function apiUrl(path) {
     const base = (config.apiBaseUrl || "").replace(/\/$/, "");
@@ -34,7 +78,7 @@
 
   function videoSourceUrl(file) {
     const path = "/api/video/" + encodeURIComponent(file.id) + "/" +
-      encodeURIComponent(file.name || "video");
+      encodeURIComponent(file.name || "video.mp4");
     return apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
   }
 
@@ -182,9 +226,12 @@
 
   function clearSubtitle() {
     subtitleLoadToken++;
-    video.querySelectorAll("track").forEach(track => track.remove());
+    if (video) {
+      video.querySelectorAll("track").forEach(track => track.remove());
+    }
     if (subtitleUrl) URL.revokeObjectURL(subtitleUrl);
     subtitleUrl = null;
+    if (toggleSubtitleBtn) toggleSubtitleBtn.classList.add("hidden");
   }
 
   function findSubtitle(videoFile) {
@@ -256,220 +303,109 @@
       track.default = true;
       video.appendChild(track);
       track.track.mode = "showing";
-      setPlaybackMessage("Legenda carregada: " + subtitle.name);
+      if (toggleSubtitleBtn) {
+        toggleSubtitleBtn.textContent = "Legenda: ON";
+        toggleSubtitleBtn.classList.remove("hidden");
+      }
     } catch (error) {
       if (requestToken !== subtitleLoadToken) return;
       console.error("Falha ao carregar legenda:", subtitle.name, error);
-      setPlaybackMessage("Falha ao carregar a legenda (" + subtitle.name + "): " + error.message);
+      setPlaybackMessage("Legenda indisponível (" + subtitle.name + "): " + error.message);
     }
   }
 
-  function nativePlayerPayload(file, sourceUrl) {
-    const extension = (file.name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
-    const mimeByExtension = {
-      mkv: "video/x-matroska", mp4: "video/mp4", m4v: "video/mp4",
-      webm: "video/webm", mov: "video/quicktime", avi: "video/x-msvideo",
-      mpg: "video/mpeg", mpeg: "video/mpeg", ts: "video/mp2t"
+  function formatMediaError(mediaError) {
+    if (!mediaError) return "Erro desconhecido ao reproduzir na TV.";
+    const reasons = {
+      1: "Reprodução interrompida.",
+      2: "Erro de rede ao ler o vídeo do Google Drive.",
+      3: "A TV não conseguiu decodificar o vídeo/áudio (codec incompatível).",
+      4: "Formato de vídeo não suportado pelo player da TV."
     };
-    const mime = mimeByExtension[extension] || file.mimeType || "application/octet-stream";
-    return {
-      fullPath: new URL(sourceUrl, window.location.href).href,
-      artist: "", subtitle: "",
-      dlnaInfo: {
-        flagVal: 4096, cleartextSize: String(file.size || -1),
-        contentLength: String(file.size || -1), opVal: 1,
-        protocolInfo: "http-get:*:" + mime + ":DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
-        duration: 0
-      },
-      mediaType: "VIDEO", thumbnail: file.thumbnailLink || "",
-      deviceType: "DMR", album: "",
-      fileName: file.name.replace(/\.[^.]+$/, ""),
-      lastPlayPosition: -1
-    };
+    const base = reasons[mediaError.code] || ("Erro de mídia (código " + mediaError.code + ").");
+    return mediaError.message ? base + " (" + mediaError.message + ")" : base;
   }
 
-  async function diagnoseMediaDelivery(sourceUrl, file) {
-    const result = { head: null, ranges: [] };
-    const readHeaders = response => ({
-      status: response.status, contentType: response.headers.get("Content-Type"),
-      contentLength: response.headers.get("Content-Length"),
-      contentRange: response.headers.get("Content-Range"),
-      acceptRanges: response.headers.get("Accept-Ranges"),
-      contentEncoding: response.headers.get("Content-Encoding"),
-      disposition: response.headers.get("Content-Disposition")
-    });
-    const readRange = async (label, range, url = sourceUrl) => {
-      const response = await fetch(url, { method: "GET", headers: { Range: range }, cache: "no-store" });
-      const headers = readHeaders(response);
-      let sample = new Uint8Array(0);
-      if (response.body) {
-        const reader = response.body.getReader();
-        try {
-          const part = await reader.read();
-          if (!part.done) sample = part.value.slice(0, 16);
-        } finally {
-          await reader.cancel().catch(() => {});
-        }
-      }
-      return { label, range, ...headers, sampleHex: Array.from(sample).map(value => value.toString(16).padStart(2, "0").toUpperCase()).join(" ") };
-    };
+  function switchToDriveFallback(file) {
+    if (!file || !preview) return;
+    usingDriveFallback = true;
+    clearTimeout(overlayTimer);
+    if (playerOverlay) playerOverlay.classList.remove("autohide");
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.classList.add("hidden");
+    preview.classList.remove("hidden");
+    preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
+    if (fallbackDriveBtn) fallbackDriveBtn.textContent = "Player da TV";
+    setPlaybackMessage("Usando Player do Drive (fallback).");
+  }
+
+  async function playInTvPlayer(index) {
+    const file = visibleVideos[index];
+    if (!file) return;
+
+    currentVideoIndex = index;
+    usingDriveFallback = false;
+    if (nowPlaying) nowPlaying.textContent = file.name.replace(/\.[^.]+$/, "");
+    if (fallbackDriveBtn) fallbackDriveBtn.textContent = "Player do Drive";
+    if (nextEpisodeBtn) {
+      nextEpisodeBtn.classList.toggle("hidden", index + 1 >= visibleVideos.length);
+    }
+
+    preview.src = "about:blank";
+    preview.classList.add("hidden");
+    video.classList.remove("hidden");
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+
+    setPlaybackMessage("Carregando vídeo no player da TV…", true);
+    showOverlayTemporarily();
+
+    await loadSubtitle(file);
+    video.src = videoSourceUrl(file);
+    video.load();
+
     try {
-      const head = await fetch(sourceUrl, { method: "HEAD", cache: "no-store" });
-      result.head = readHeaders(head);
-      const size = Number(result.head.contentLength || file?.size || 0);
-      const ranges = [["início", "bytes=0-4095"], ["1 MiB", "bytes=1048576-1052671"]];
-      if (Number.isSafeInteger(size) && size > 8192) {
-        const middle = Math.floor(size / 2), late = Math.floor(size * 0.9);
-        ranges.push(["meio", "bytes=" + middle + "-" + (middle + 4095)], ["90%", "bytes=" + late + "-" + (late + 4095)], ["final", "bytes=" + Math.max(0, size - 4096) + "-" + (size - 1)]);
+      await video.play();
+      setPlaybackMessage("");
+      showOverlayTemporarily();
+    } catch (error) {
+      if (error && error.name === "NotAllowedError") {
+        setPlaybackMessage("Pressione Play / OK no controle da TV para iniciar.", true);
+      } else if (!video.error) {
+        setPlaybackMessage("Não foi possível iniciar automaticamente: " + (error.message || error));
       }
-      for (const [label, range] of ranges) {
-        try { result.ranges.push(await readRange(label, range)); }
-        catch (error) { result.ranges.push({ label, range, error: error.message }); }
-      }
-    } catch (error) { result.head = { error: error.message }; }
-    try {
-      result.externalReference = await readRange("MKV externo conhecido", "bytes=900000-900255", apiUrl("/api/reference-mkv"));
-    } catch (error) { result.externalReference = { error: error.message }; }
-    console.group("Diagnóstico de entrega de mídia");
-    console.log("Arquivo:", file?.name || "atual");
-    console.log("HEAD Worker:", result.head);
-    console.table(result.ranges);
-    console.log("Referência MKV externa:", result.externalReference);
-    console.groupEnd();
-    const head = result.head || {};
-    const lines = [
-      "Diagnóstico HTTP — " + (file?.name || "arquivo"),
-      "HEAD: " + (head.status || "falhou") + " • " + (head.contentType || "sem MIME") + " • tamanho " + (head.contentLength || "?") + " • Accept-Ranges " + (head.acceptRanges || "?"),
-      ...result.ranges.map(item => item.label + ": " + (item.status || "falhou") + " • " + (item.contentRange || "sem Content-Range") + " • " + (item.contentLength || "?") + " bytes declarados" + (item.error ? " • " + item.error : "")),
-      "MKV externo: " + (result.externalReference.status || "falhou") + " • " + (result.externalReference.contentRange || "sem Content-Range")
-    ];
-    return { details: result, summary: lines.join("\n") };
-  }
-
-  function launchNativePlayer(file, sourceUrl) {
-    const payload = nativePlayerPayload(file, sourceUrl);
-    const params = { payload: [payload] };
-    if (window.webOS && window.webOS.service && typeof window.webOS.service.request === "function") {
-      return new Promise(resolve => {
-        window.webOS.service.request("luna://com.webos.applicationManager", {
-          method: "launch", parameters: { id: "com.webos.app.mediadiscovery", params },
-          onSuccess: response => resolve({ ok: true, response }),
-          onFailure: error => resolve({ ok: false, error })
-        });
-      });
     }
-    if (window.webOSDev && typeof window.webOSDev.launch === "function") {
-      return new Promise(resolve => {
-        window.webOSDev.launch({
-          id: "com.webos.app.mediadiscovery", params,
-          onSuccess: response => resolve({ ok: true, response }),
-          onFailure: error => resolve({ ok: false, error })
-        });
-      });
-    }
-    return Promise.resolve({ ok: false, unavailable: true, error: { errorText: "As APIs webOS não estão disponíveis nesta sessão do navegador." } });
-  }
-
-  function directDriveUrls(file) {
-    const id = encodeURIComponent(file.id);
-    return [
-      { label: "Link /view", url: "https://drive.google.com/file/d/" + id + "/view" },
-      { label: "Download direto", url: "https://drive.google.com/uc?export=download&id=" + id }
-    ];
-  }
-
-  function openDirectSource(source) {
-    const opened = window.open(source.url, "_blank", "noopener");
-    if (opened) setPlaybackMessage(source.label + " aberto em uma nova aba. Observe se o Drive mostra uma confirmação ou inicia o download.");
-    else setPlaybackMessage("O navegador bloqueou a nova aba. Permita pop-ups para este site e tente novamente.");
-  }
-
-  async function tryDirectSource(file, source) {
-    setPlaybackMessage("Enviando " + source.label + " ao player nativo da TV…");
-    if (window.webOS && window.webOS.service && typeof window.webOS.service.request === "function") {
-      const nativeResult = await launchNativePlayer(file, source.url);
-      if (nativeResult.ok) {
-        video.pause();
-        video.removeAttribute("src");
-        video.load();
-        player.classList.add("hidden");
-        document.getElementById("library").classList.remove("hidden");
-        status.textContent = "Reprodução transferida para a TV (" + source.label + ")";
-        return;
-      }
-      setPlaybackMessage("O player da TV recusou " + source.label + ": " + (nativeResult.error?.errorText || nativeResult.error?.message || "erro não identificado"));
-      return;
-    }
-    setPlaybackMessage("Este teste abre o player nativo da TV. No computador, use os botões de abrir origem ou diagnosticar Worker; o navegador pode não reproduzir MKV.");
   }
 
   async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
-    const preview = document.getElementById("drive-preview");
-    const isTvMkv = !!window.PalmSystem && /\.mkv$/i.test(file.name || "");
-    if (!preview) {
-      setMessage("O visualizador do Google Drive não foi encontrado.");
-      return;
-    }
-    preview.dataset.index = String(index);
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
     if (!playerHistoryActive) {
       history.pushState({ drivePlayer: true }, "", "#player");
       playerHistoryActive = true;
     }
-
-    if (isTvMkv) {
-      preview.classList.add("hidden");
-      video.classList.add("hidden");
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-
-      const sourceUrl = videoSourceUrl(file);
-      setPlaybackMessage("Abrindo o player nativo da LG…");
-
-      try {
-        const nativeResult = await launchNativePlayer(file, sourceUrl);
-        if (nativeResult.ok) {
-          // O Media Discovery assume a reprodução; o app permanece pronto
-          // para ser retomado quando o usuário sair do player da TV.
-          player.classList.add("hidden");
-          document.getElementById("library").classList.remove("hidden");
-          status.textContent = "Player nativo da LG aberto";
-          return;
-        }
-
-        const reason = nativeResult.error?.errorText ||
-          nativeResult.error?.message ||
-          (nativeResult.unavailable ? "API webOS indisponível" : "erro não identificado");
-        setPlaybackMessage("A TV não aceitou abrir o player nativo: " + reason);
-        status.textContent = "Falha ao abrir player nativo";
-      } catch (error) {
-        console.error("Falha ao abrir o player nativo:", error);
-        setPlaybackMessage("Não foi possível abrir o player nativo da LG: " + (error.message || error));
-        status.textContent = "Falha ao abrir player nativo";
-      }
-      return;
-    }
-
-    if (video) video.classList.add("hidden");
-    preview.classList.remove("hidden");
-    preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
-    if (!window.PalmSystem) preview.focus();
+    await playInTvPlayer(index);
+    document.getElementById("close-player")?.focus();
   }
 
   function closePlayer(fromHistory = false) {
-    const preview = document.getElementById("drive-preview");
+    clearTimeout(overlayTimer);
+    clearTimeout(messageTimer);
+    usingDriveFallback = false;
+    setPlaybackMessage("");
+
     if (preview) {
       preview.src = "about:blank";
       preview.removeAttribute("src");
-      preview.classList.remove("hidden");
+      preview.classList.add("hidden");
     }
     if (video) {
       video.pause();
-      if (window.stopTvTranscode) window.stopTvTranscode();
       video.removeAttribute("src");
       video.load();
       video.classList.add("hidden");
@@ -477,11 +413,11 @@
     clearSubtitle();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
-    const selected = Number(preview?.dataset.index);
-    const cards = grid.querySelectorAll(".video-card");
-    if (Number.isInteger(selected) && cards[selected]) cards[selected].focus();
 
-    // Ao clicar no botão visível, remove também a entrada criada para o player.
+    const cards = grid.querySelectorAll(".video-card");
+    const targetCard = cards[currentVideoIndex];
+    if (targetCard) targetCard.focus();
+
     if (!fromHistory && playerHistoryActive) {
       playerHistoryActive = false;
       history.back();
@@ -490,24 +426,104 @@
     }
   }
 
+  video.addEventListener("playing", () => {
+    setPlaybackMessage("");
+    showOverlayTemporarily();
+  });
+
+  video.addEventListener("pause", () => {
+    showOverlayTemporarily();
+  });
+
+  video.addEventListener("waiting", () => {
+    if (!usingDriveFallback) {
+      setPlaybackMessage("Carregando buffer do Google Drive…", true);
+    }
+  });
+
+  video.addEventListener("error", () => {
+    if (usingDriveFallback || player.classList.contains("hidden")) return;
+    const detail = formatMediaError(video.error);
+    console.error("Erro no player da TV:", video.error);
+    setPlaybackMessage(detail + " Se persistir, selecione 'Player do Drive' acima.", true);
+    if (playerOverlay) playerOverlay.classList.remove("autohide");
+    fallbackDriveBtn?.focus();
+  });
+
+  toggleSubtitleBtn?.addEventListener("click", () => {
+    const track = video.textTracks && video.textTracks[0];
+    if (!track) return;
+    const nextShowing = track.mode !== "showing";
+    track.mode = nextShowing ? "showing" : "disabled";
+    toggleSubtitleBtn.textContent = nextShowing ? "Legenda: ON" : "Legenda: OFF";
+    showOverlayTemporarily();
+  });
+
+  nextEpisodeBtn?.addEventListener("click", () => {
+    if (currentVideoIndex + 1 < visibleVideos.length) {
+      playInTvPlayer(currentVideoIndex + 1);
+    }
+  });
+
+  fallbackDriveBtn?.addEventListener("click", () => {
+    const file = visibleVideos[currentVideoIndex];
+    if (!file) return;
+    if (usingDriveFallback) {
+      playInTvPlayer(currentVideoIndex);
+    } else {
+      switchToDriveFallback(file);
+    }
+  });
+
   document.getElementById("close-player")?.addEventListener("click", () => closePlayer());
 
-  // O webOS TV gerencia o botão Back pelo histórico do navegador e emite popstate.
   window.addEventListener("popstate", () => {
     if (playerHistoryActive) closePlayer(true);
   });
 
-  document.getElementById("refresh").addEventListener("click", loadLibrary);
-  function setPlaybackMessage(text) {
-    let notice = document.getElementById("playback-message");
-    if (!notice) {
-      notice = document.createElement("p");
-      notice.id = "playback-message";
-      notice.className = "message";
-      video.insertAdjacentElement("afterend", notice);
+  // Controles do controle remoto da TV quando o player nativo está aberto
+  window.addEventListener("keydown", event => {
+    if (player.classList.contains("hidden")) return;
+    showOverlayTemporarily();
+
+    // Botão Voltar da LG webOS (keyCode 461)
+    if (event.keyCode === 461) {
+      event.preventDefault();
+      closePlayer();
+      return;
     }
-    notice.textContent = text;
-  }
+
+    if (usingDriveFallback) return;
+
+    const isButtonFocused = document.activeElement && document.activeElement.tagName === "BUTTON";
+
+    if (event.key === "MediaPlayPause" || event.keyCode === 415 || event.keyCode === 19 ||
+        ((event.key === "Enter" || event.key === " ") && !isButtonFocused)) {
+      event.preventDefault();
+      if (video.paused) video.play().catch(() => {});
+      else video.pause();
+    } else if (event.key === "ArrowLeft" || event.key === "MediaRewind" || event.keyCode === 412) {
+      if (!isButtonFocused || event.keyCode === 412) {
+        event.preventDefault();
+        if (Number.isFinite(video.currentTime)) {
+          video.currentTime = Math.max(0, video.currentTime - 15);
+          setPlaybackMessage("⏪ -15s");
+        }
+      }
+    } else if (event.key === "ArrowRight" || event.key === "MediaFastForward" || event.keyCode === 417) {
+      if (!isButtonFocused || event.keyCode === 417) {
+        event.preventDefault();
+        if (Number.isFinite(video.currentTime)) {
+          const maxTime = Number.isFinite(video.duration) ? video.duration : video.currentTime + 15;
+          video.currentTime = Math.min(maxTime, video.currentTime + 15);
+          setPlaybackMessage("⏩ +15s");
+        }
+      }
+    }
+  });
+
+  player.addEventListener("mousemove", showOverlayTemporarily);
+  document.getElementById("refresh").addEventListener("click", loadLibrary);
 
   loadLibrary();
 })();
