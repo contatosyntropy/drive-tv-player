@@ -31,6 +31,7 @@ async function fetchDriveMedia(request, fileId, apiKey) {
   driveUrl.searchParams.set("alt", "media");
   driveUrl.searchParams.set("key", apiKey);
   driveUrl.searchParams.set("supportsAllDrives", "true");
+  driveUrl.searchParams.set("acknowledgeAbuse", "true");
 
   if (request.method === "HEAD") headers.set("Range", "bytes=0-0");
 
