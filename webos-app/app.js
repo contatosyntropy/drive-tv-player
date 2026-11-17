@@ -103,8 +103,8 @@
 
   function videoSourceUrl(file, mimeParam) {
     const path = "/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name || "video.mp4");
-    let url = apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
-    if (mimeParam) url += "&mime=" + encodeURIComponent(mimeParam);
+    let url = apiUrl(path);
+    if (mimeParam) url += "?mime=" + encodeURIComponent(mimeParam);
     return url;
   }
 
@@ -273,13 +273,9 @@
     let pageToken = "";
     const collected = [];
     do {
-      const query = "'" + folderId + "' in parents and trashed = false";
-      const fields = "nextPageToken,files(id,name,mimeType,size,thumbnailLink,webViewLink,parents)";
-      let url = "https://www.googleapis.com/drive/v3/files?q=" + encodeURIComponent(query) +
-        "&pageSize=1000&orderBy=name&fields=" + encodeURIComponent(fields) +
-        "&key=" + encodeURIComponent(config.apiKey);
+      let url = apiUrl("/api/files") + "?folderId=" + encodeURIComponent(folderId);
       if (pageToken) url += "&pageToken=" + encodeURIComponent(pageToken);
-      const response = await fetch(url);
+      const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error((data.error && data.error.message) || "Erro HTTP " + response.status);
@@ -303,9 +299,9 @@
 
   async function loadLibrary() {
     grid.innerHTML = "";
-    if (!config.folderId || !config.apiKey || config.apiKey.includes("COLE_SUA")) {
+    if (!config.folderId || !config.apiBaseUrl) {
       status.textContent = "Configuração necessária";
-      setMessage("Adicione sua chave da API do Google Drive no arquivo config.js para carregar os vídeos.");
+      setMessage("Configure a pasta do Google Drive e o endereço do Worker no arquivo config.js.");
       return;
     }
     status.textContent = "Carregando…";
@@ -536,7 +532,7 @@
     activeSubtitleId = subEntry.file.id;
     renderSubtitleMenu();
     try {
-      const url = apiUrl("/api/subtitle/" + encodeURIComponent(subEntry.file.id)) + "?key=" + encodeURIComponent(config.apiKey);
+      const url = apiUrl("/api/subtitle/" + encodeURIComponent(subEntry.file.id));
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error("HTTP " + response.status);
       const buffer = await response.arrayBuffer();
