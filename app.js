@@ -420,7 +420,6 @@
       return;
     }
 
-    if (false) return;
 
     const isButtonFocused = document.activeElement && document.activeElement.tagName === "BUTTON";
 
