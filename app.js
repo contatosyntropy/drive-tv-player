@@ -531,6 +531,7 @@
   window.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
     showBackButtonTemporarily();
+    showControls();
     if (event.keyCode === 461 || event.key === "Escape" || event.key === "Back") {
       event.preventDefault();
       closePlayer();
