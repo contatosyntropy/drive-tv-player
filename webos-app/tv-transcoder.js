@@ -35,6 +35,20 @@
     objectUrls = [];
   }
 
+  function cleanupVirtualFs(engine) {
+    if (!engine) return;
+    try { engine.FS("unlink", "/input.mkv"); } catch (_) {}
+    try { engine.FS("unlink", "/index.m3u8"); } catch (_) {}
+    try {
+      const entries = engine.FS("readdir", "/");
+      entries.forEach(name => {
+        if (/^segment_\d+\.ts$/.test(name)) {
+          try { engine.FS("unlink", "/" + name); } catch (_) {}
+        }
+      });
+    } catch (_) {}
+  }
+
   async function verifyRangeSource(sourceUrl, expectedSize) {
     message("Verificando leitura HTTP por partes no Google Drive…");
     const response = await fetch(sourceUrl, {
@@ -85,29 +99,27 @@
     if (running) throw new Error("Já existe uma conversão em andamento.");
     running = true;
     releaseOutput();
+    let engine = null;
     try {
-      // Reject unsupported input before allocating WebAssembly memory.
       if (Number(file.size) > 2000000000) {
         throw new Error("Este arquivo tem " + (Number(file.size) / 1000000000).toFixed(2) + " GB. O FFmpeg.wasm 0.11 tem limite documentado de entrada de 2 GB.");
       }
 
-      // Test the Worker -> Drive byte-range path independently from FFmpeg.
-      // Range I/O is handled by Emscripten's lazy filesystem, not FFmpeg's
-      // network protocol (disabled in the stock wasm core).
       await verifyRangeSource(sourceUrl, file.size);
 
       message("Iniciando FFmpeg na TV. O arquivo original permanece no Google Drive.");
-      const engine = await getFFmpeg();
+      engine = await getFFmpeg();
 
-      try { engine.FS("unlink", "/input.mkv"); } catch (_) {}
+      cleanupVirtualFs(engine);
       try {
-        // Emscripten's lazy-file layer performs ranged XHR on demand.
         engine.FS("createLazyFile", "/", "input.mkv", sourceUrl, true, false);
       } catch (error) {
         throw new Error("O core FFmpeg não expõe o sistema de arquivos lazy necessário para leitura por partes (createLazyFile). Detalhe: " + error.message);
       }
+
       message("Leitura HTTP por partes confirmada. Convertendo o áudio para AAC…");
       await engine.run(
+        "-fflags", "+genpts",
         "-i", "/input.mkv",
         "-t", String(MAX_TEST_SECONDS),
         "-map", "0:v:0",
@@ -116,9 +128,14 @@
         "-c:a", "aac",
         "-b:a", "192k",
         "-ac", "2",
+        "-avoid_negative_ts", "make_zero",
+        "-max_interleave_delta", "0",
+        "-muxdelay", "0",
+        "-muxpreload", "0",
         "-f", "hls",
-        "-hls_time", "15",
+        "-hls_time", "10",
         "-hls_playlist_type", "vod",
+        "-hls_flags", "independent_segments",
         "-hls_segment_filename", "/segment_%03d.ts",
         "/index.m3u8"
       );
@@ -126,6 +143,7 @@
       let playlist = new TextDecoder("utf-8").decode(engine.FS("readFile", "/index.m3u8"));
       const names = engine.FS("readdir", "/").filter(name => /^segment_\d+\.ts$/.test(name)).sort();
       if (!names.length) throw new Error("O FFmpeg terminou sem gerar segmentos HLS.");
+
       const urlsByName = {};
       names.forEach(name => {
         const bytes = engine.FS("readFile", "/" + name);
@@ -133,14 +151,29 @@
         objectUrls.push(url);
         urlsByName[name] = url;
       });
-      playlist = playlist.split(/\r?\n/).map(line => urlsByName[line] || line).join("\n");
+
+      // Libera os arquivos do MEMFS assim que os Blobs são criados para economizar RAM na TV.
+      cleanupVirtualFs(engine);
+
+      playlist = playlist
+        .split(/\r?\n/)
+        .map(line => urlsByName[line.trim()] || line)
+        .join("\n");
+
       const playlistUrl = URL.createObjectURL(new Blob([playlist], { type: "application/vnd.apple.mpegurl" }));
       objectUrls.push(playlistUrl);
 
       video.classList.remove("hidden");
       video.controls = true;
       if (window.Hls && window.Hls.isSupported()) {
-        hls = new window.Hls({ enableWorker: false, maxBufferLength: 30 });
+        hls = new window.Hls({
+          enableWorker: false,
+          maxBufferLength: 30,
+          maxBufferHole: 0.5,
+          nudgeOffset: 0.1,
+          nudgeMaxRetry: 5,
+          startPosition: 0
+        });
         hls.loadSource(playlistUrl);
         hls.attachMedia(video);
         hls.on(window.Hls.Events.ERROR, (_event, data) => {
@@ -151,9 +184,11 @@
       } else {
         throw new Error("Este webOS não reconheceu HLS no elemento de vídeo.");
       }
+
       video.play().catch(error => message("Conversão concluída. Pressione Play no controle da TV. " + error.message));
       message("Conversão concluída na TV. Esta versão reproduz somente os primeiros 120 segundos para validar o processamento local.");
     } finally {
+      cleanupVirtualFs(engine);
       running = false;
     }
   }
