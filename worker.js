@@ -41,7 +41,7 @@ async function fetchDriveMedia(request, fileId, apiKey) {
   });
 }
 
-async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
+async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "") {
   try {
     const upstream = await fetchDriveMedia(request, fileId, apiKey);
     const contentType = upstream.headers.get("Content-Type") || "";
@@ -69,7 +69,7 @@ async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
       const extensionMatch = fileName.match(/\.([^.]+)$/);
       const extension = extensionMatch ? extensionMatch[1].toLowerCase() : "";
       const mimeTypes = {
-        mkv: "video/mp4",
+        mkv: "video/x-matroska",
         webm: "video/webm",
         mp4: "video/mp4",
         m4v: "video/mp4",
@@ -79,7 +79,14 @@ async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
         mpeg: "video/mpeg",
         ts: "video/mp2t"
       };
-      if (mimeTypes[extension]) responseHeaders.set("Content-Type", mimeTypes[extension]);
+      const mimeOverride = url.searchParams.get("mime");
+      if (mimeOverride === "octet") {
+        responseHeaders.set("Content-Type", "application/octet-stream");
+      } else if (mimeOverride === "mp4") {
+        responseHeaders.set("Content-Type", "video/mp4");
+      } else if (mimeTypes[extension]) {
+        responseHeaders.set("Content-Type", mimeTypes[extension]);
+      }
       responseHeaders.set("Accept-Ranges", "bytes");
       responseHeaders.set("Content-Disposition", "inline");
     }
@@ -129,6 +136,7 @@ export default {
 
       return proxyDriveFile(
         request,
+        url,
         match[1],
         apiKey,
         videoMatch ? "video" : "subtitle",
