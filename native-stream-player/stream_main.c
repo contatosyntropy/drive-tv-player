@@ -23,6 +23,11 @@
 #define FEED_BACKOFF_NS 5000000LL
 #define LOG_PATH_SUFFIX "/drive-tv-native-stream-player.log"
 
+/* NDL v2 clock-plane prime: 20 ms of silent stereo PCM per chunk. */
+#define CLOCK_AUDIO_FRAMES_PER_CHUNK 960
+#define CLOCK_AUDIO_CHUNK_US 20000LL
+#define CLOCK_AUDIO_PRIME_CHUNKS 5
+
 static volatile int g_load_completed = 0;
 static volatile int g_playing = 0;
 static int64_t g_feed_window_start = 0;
@@ -321,14 +326,42 @@ static void resource_released(const char *type){char s[200];snprintf(s,sizeof(s)
 static int64_t monotonic_ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (int64_t)t.tv_sec*1000000000LL+t.tv_nsec;}
 static void sleep_ns(int64_t ns){if(ns<=0)return;struct timespec t={(time_t)(ns/1000000000LL),(long)(ns%1000000000LL)};while(nanosleep(&t,&t)&&errno==EINTR){}}
 static void wait_until(int64_t target){int64_t now=monotonic_ns();if(target>now)sleep_ns(target-now);}
-static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t decode_time_us,int64_t *clock_origin,int *last_rc){
+
+/* NDL v2 may ignore video PTS when the PCM clock plane is not initialized.
+ * Prime it with a short silent stereo stream before submitting video. */
+static int prime_audio_clock(int64_t *video_pts_offset_us){
+    static int16_t silence[CLOCK_AUDIO_FRAMES_PER_CHUNK * 2] = {0};
+    int accepted=0;
+    for(int i=0;i<CLOCK_AUDIO_PRIME_CHUNKS;i++){
+        long long pts_us=(long long)i*CLOCK_AUDIO_CHUNK_US;
+        int rc=NDL_DirectAudioPlay(silence,(unsigned int)sizeof(silence),pts_us);
+        if(rc!=0){
+            char line[192];
+            snprintf(line,sizeof(line),"NDL_AUDIO_CLOCK_PRIME rejected chunk=%d rc=%d",i,rc);
+            log_line(line);
+            break;
+        }
+        accepted++;
+        if(g_load_completed)break;
+        sleep_ns(5000000LL);
+    }
+    if(accepted==0)return 0;
+    *video_pts_offset_us=(int64_t)accepted*CLOCK_AUDIO_CHUNK_US;
+    char line[224];
+    snprintf(line,sizeof(line),"NDL_AUDIO_CLOCK_PRIMED sample_rate=48000 channels=2 chunks=%d video_pts_offset_us=%lld",
+             accepted,(long long)*video_pts_offset_us);
+    log_line(line);
+    return 1;
+}
+
+static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t video_pts_offset_us,int64_t decode_time_us,int64_t *clock_origin,int *last_rc){
     int64_t pts_abs=p->pts==AV_NOPTS_VALUE?0:av_rescale_q(p->pts,tb,AV_TIME_BASE_Q);
     int64_t dts_abs=p->dts==AV_NOPTS_VALUE?pts_abs:av_rescale_q(p->dts,tb,AV_TIME_BASE_Q);
     if (p->dts == AV_NOPTS_VALUE) g_diag_missing_dts++;
     if (g_diag_previous_pts != AV_NOPTS_VALUE && p->pts != AV_NOPTS_VALUE &&
         av_rescale_q(p->pts,tb,AV_TIME_BASE_Q) < g_diag_previous_pts) g_diag_pts_backwards++;
     if (p->pts != AV_NOPTS_VALUE) g_diag_previous_pts = av_rescale_q(p->pts,tb,AV_TIME_BASE_Q);
-    int64_t pts=pts_abs-origin_us;
+    int64_t pts=pts_abs-origin_us+video_pts_offset_us;
     int64_t dts=decode_time_us;
     int64_t duration_us=p->duration>0?av_rescale_q(p->duration,tb,AV_TIME_BASE_Q):0;
     if(pts<0)pts=0;if(dts<0)dts=0;
@@ -357,15 +390,15 @@ static int feed_frame(AVPacket *p,AVRational tb,int64_t origin_us,int64_t decode
     wait_until(target_ns);
     for(int i=0;i<MAX_FEED_RETRIES;i++){
         int64_t call_start=monotonic_ns();
-        /* DirectMedia v2 expects PTS in milliseconds since load, not microseconds. */
-        int rc=NDL_DirectVideoPlay(p->data,(unsigned int)p->size,(long long)(pts/1000LL));
+        /* DirectMedia v2 PTS is expressed in microseconds. */
+        int rc=NDL_DirectVideoPlay(p->data,(unsigned int)p->size,(long long)pts);
         int64_t call_ns=monotonic_ns()-call_start;
         g_feed_call_total_ns+=call_ns;if(call_ns>g_feed_call_max_ns)g_feed_call_max_ns=call_ns;
         *last_rc=rc;if(rc==0){if(i>0)g_feed_retries+=i;return 1;}
         sleep_ns(FEED_BACKOFF_NS);
     }g_feed_retries+=MAX_FEED_RETRIES;return 0;
 }
-static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t frame_interval_us,int64_t *clock_origin,long *frames){
+static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t video_pts_offset_us,int64_t frame_interval_us,int64_t *clock_origin,long *frames){
     AVPacket *out=av_packet_alloc();if(!out)return AVERROR(ENOMEM);
     int last=0,result=0;
     while((result=av_bsf_receive_packet(bsf,out))>=0){
@@ -381,7 +414,7 @@ static int drain_bsf(AVBSFContext *bsf,AVRational tb,int64_t origin_us,int64_t f
               pts_us==AV_NOPTS_VALUE?-1.0:pts_us/1000.0,dts_us==AV_NOPTS_VALUE?-1.0:dts_us/1000.0,dur_us/1000.0,out->size,out->flags,shape);
             log_line(sample);g_diag_packet_samples++;
         }
-        if(!feed_frame(out,tb,origin_us,(int64_t)(*frames)*frame_interval_us,clock_origin,&last)){
+        if(!feed_frame(out,tb,origin_us,video_pts_offset_us,(int64_t)(*frames)*frame_interval_us,clock_origin,&last)){
             char s[300];const char *e=NDL_DirectMediaGetError();
             snprintf(s,sizeof(s),"NDL_DirectVideoPlay failed frame=%ld size=%d rc=%d error=%s",
               *frames,out->size,last,e?e:"(none)");log_line(s);av_packet_free(&out);return AVERROR(EIO);
@@ -431,7 +464,7 @@ static int read_stream_url(char *url,size_t cap){
 int main(void){
     const char *home=getenv("HOME");char logpath[512];snprintf(logpath,sizeof(logpath),"%s%s",home?home:"/tmp",LOG_PATH_SUFFIX);unlink(logpath);
     log_line("=== DIRECT GOOGLE DRIVE MKV STREAM START ===");
-    log_line("BUILD_DIAGNOSTIC version=0.1.3 source=stream_main.c build=timestamp-diagnostics");
+    log_line("BUILD_DIAGNOSTIC version=0.1.4 source=stream_main.c build=pcm-clock-prime-pts-microseconds");
     char url[4096];if(!read_stream_url(url,sizeof(url))){log_line("stream-url.txt missing or invalid");return 2;}
     if(!strstr(url,"/api/video/")||!strstr(url,"?key=")){log_line("stream URL must be a Worker /api/video URL with key");return 2;}
     if(curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK){log_line("curl global init failed");return 3;}
@@ -479,13 +512,19 @@ int main(void){
     NDL_DirectMediaSetAppState(NDL_DIRECTMEDIA_APP_STATE_FOREGROUND);
     NDL_DIRECTMEDIA_DATA_INFO_T info={0};
     info.video.width=st->codecpar->width;info.video.height=st->codecpar->height;info.video.type=NDL_VIDEO_TYPE_H265;
-    info.audio.pcm.type=0;info.audio.pcm.format=NDL_DIRECTMEDIA_AUDIO_PCM_FORMAT_S16LE;
+    info.audio.pcm.type=NDL_AUDIO_TYPE_PCM;info.audio.pcm.format=NDL_DIRECTMEDIA_AUDIO_PCM_FORMAT_S16LE;
     info.audio.pcm.layout="interleaved";info.audio.pcm.channelMode="stereo";
-    info.audio.pcm.sampleRate=NDL_DIRECTMEDIA_AUDIO_PCM_SAMPLE_RATE_NONE;
+    info.audio.pcm.sampleRate=NDL_DIRECTMEDIA_AUDIO_PCM_SAMPLE_RATE_48KHZ;
     if(NDL_DirectMediaLoad(&info,media_callback)!=0){const char *e=NDL_DirectMediaGetError();log_line(e?e:"NDL load failed");NDL_DirectMediaQuit();goto fail_ui;}
     if(NDL_DirectVideoSetArea(0,0,mode.w,mode.h)!=0){log_line("NDL_DirectVideoSetArea failed");NDL_DirectMediaUnload();NDL_DirectMediaQuit();goto fail_ui;}
+    int64_t video_pts_offset_us=0;
+    if(!prime_audio_clock(&video_pts_offset_us)){
+        log_line("NDL PCM clock plane could not be primed; refusing video-only fallback");
+        NDL_DirectMediaUnload();NDL_DirectMediaQuit();goto fail_ui;
+    }
     SDL_SetRenderDrawColor(renderer,0,0,0,0);SDL_RenderClear(renderer);SDL_RenderPresent(renderer);
-    log_line("NDL load accepted; beginning continuous HEVC packet feed");
+    log_line("NDL load accepted; PCM clock primed; beginning continuous HEVC packet feed");
+    log_line("NDL_PTS_UNITS=microseconds");
     AVPacket *packet=av_packet_alloc();int64_t origin_us=AV_NOPTS_VALUE,clock_origin=0;long frames=0;int failed=0;
     AVRational frame_rate=st->avg_frame_rate.num>0?st->avg_frame_rate:st->r_frame_rate;
     int64_t frame_interval_us=frame_rate.num>0?av_rescale_q(1,av_inv_q(frame_rate),AV_TIME_BASE_Q):41667;
@@ -506,7 +545,7 @@ int main(void){
             }
             rc=av_bsf_send_packet(bsf,packet);
             if(rc<0){log_line("HEVC bitstream filter rejected packet");failed=1;av_packet_unref(packet);break;}
-            rc=drain_bsf(bsf,bsf->time_base_out,origin_us,frame_interval_us,&clock_origin,&frames);
+            rc=drain_bsf(bsf,bsf->time_base_out,origin_us,video_pts_offset_us,frame_interval_us,&clock_origin,&frames);
             if(rc<0){failed=1;av_packet_unref(packet);break;}
         }
         av_packet_unref(packet);
@@ -516,7 +555,7 @@ int main(void){
     else if(demux_rc==AVERROR_EOF)stop_reason="eof";
     if(!failed){
         av_bsf_send_packet(bsf,NULL);
-        if(drain_bsf(bsf,bsf->time_base_out,origin_us==AV_NOPTS_VALUE?0:origin_us,frame_interval_us,&clock_origin,&frames)<0)failed=1;
+        if(drain_bsf(bsf,bsf->time_base_out,origin_us==AV_NOPTS_VALUE?0:origin_us,video_pts_offset_us,frame_interval_us,&clock_origin,&frames)<0)failed=1;
     }
     av_packet_free(&packet);
     {char s[320];snprintf(s,sizeof(s),"Stream ended: frames=%ld LOADCOMPLETED=%s PLAYING=%s demux_rc=%d stop_reason=%s",
