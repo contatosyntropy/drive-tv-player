@@ -1,39 +1,6 @@
 <!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#08090d">
-  <title>Drive TV Player</title>
-  <link rel="stylesheet" href="./styles.css">
-</head>
-<body>
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark">▶</span><span>DRIVE<span class="muted">PLAYER</span></span></div>
-    <div class="top-actions"><span id="status" class="status">Preparando biblioteca…</span><button id="refresh" class="icon-button" aria-label="Atualizar biblioteca">↻</button></div>
-  </header>
-  <main id="library">
-    <section class="hero">
-      <p class="eyebrow">SUA BIBLIOTECA</p>
-      <h1>Escolha o que assistir.</h1>
-      <p class="subheading">Seus vídeos do Google Drive, em um só lugar.</p>
-    </section>
-    <nav id="breadcrumbs" class="breadcrumbs" aria-label="Navegação de pastas"></nav>
-    <div id="message" class="message">Carregando vídeos…</div>
-    <section id="videos" class="video-grid" aria-label="Vídeos"></section>
-  </main>
-  <section id="player" class="player hidden" aria-label="Player da TV">
-    <button id="close-player" class="close-player" type="button">← Voltar</button>
-    <p id="playback-message" class="playback-message hidden" role="status"></p>
-    <video id="video" class="tv-video" controls playsinline preload="metadata"></video>
-  </section>
-  <script src="./webOSTV.js" onerror="void 0"></script>
-  <script src="./config.js"></script>
-  <script src="./tv-transcoder.js"></script>
-  <script>
-    window.APP_CONFIG = window.APP_CONFIG || {};
-    window.APP_CONFIG.apiBaseUrl = "https://drive-tv-player.contatosyntropy.workers.dev";
-  </script>
-  <script src="./app.js"></script>
-</body>
-</html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#08090d"><title>Drive TV Player</title><link rel="stylesheet" href="./styles.css"></head>
+<body><header class="topbar"><div class="brand"><span class="brand-mark">▶</span><span>DRIVE<span class="muted">PLAYER</span></span></div><div class="top-actions"><span id="status" class="status">Preparando biblioteca…</span><button id="refresh" class="icon-button" aria-label="Atualizar biblioteca">↻</button></div></header>
+<main id="library"><section class="hero"><p class="eyebrow">SUA BIBLIOTECA</p><h1>Escolha o que assistir.</h1><p class="subheading">Seus vídeos do Google Drive, em um só lugar.</p></section><nav id="breadcrumbs" class="breadcrumbs" aria-label="Navegação de pastas"></nav><div id="message" class="message">Carregando vídeos…</div><section id="videos" class="video-grid" aria-label="Vídeos"></section></main>
+<section id="player" class="player hidden" aria-label="Player da TV"><button id="close-player" class="close-player" type="button">← Voltar</button><video id="video" class="tv-video" controls playsinline preload="metadata"></video><iframe id="drive-frame" class="drive-frame hidden" title="Player do Google Drive" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe></section>
+<script src="./webOSTV.js" onerror="void 0"></script><script src="./config.js"></script><script src="./app.js"></script></body></html>
