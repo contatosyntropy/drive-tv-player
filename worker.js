@@ -69,7 +69,7 @@ async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
       const extensionMatch = fileName.match(/\.([^.]+)$/);
       const extension = extensionMatch ? extensionMatch[1].toLowerCase() : "";
       const mimeTypes = {
-        mkv: "video/x-matroska",
+        mkv: "video/mp4",
         webm: "video/webm",
         mp4: "video/mp4",
         m4v: "video/mp4",
