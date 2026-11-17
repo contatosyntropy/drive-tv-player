@@ -41,6 +41,10 @@
   let visibleVideos = [];
   let currentVideoIndex = -1;
   let retriedAlternativeMime = false;
+  let playbackAttempt = 0;
+  let playbackSessionToken = 0;
+  let startupWatchdog = null;
+  let probedAudioForIndex = -1;
   let playerHistoryActive = false;
   let hudTimer = null;
   let toastTimer = null;
@@ -636,24 +640,74 @@
   }
 
   function resetVideoSources() {
+    clearTimeout(startupWatchdog);
     video.pause();
     video.removeAttribute("src");
     while (video.firstChild) video.removeChild(video.firstChild);
     video.load();
   }
 
-  function attachVideoSource(file, forceMp4Mime) {
+  function buildWebOSMediaOption() {
+    const options = {
+      mediaTransportType: "URI",
+      option: {
+        mediaFormat: {
+          type: "video"
+        }
+      }
+    };
+    return encodeURIComponent(JSON.stringify(options));
+  }
+
+  function startStreamAttempt(file, attempt, sessionToken) {
+    if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
+    playbackAttempt = attempt;
     resetVideoSources();
-    const isMkv = /\.mkv$/i.test(file.name || "");
-    const baseMime = isMkv && !forceMp4Mime ? "video/x-matroska" : "video/mp4";
-    const source = document.createElement("source");
-    source.src = videoSourceUrl(file);
-    if (isWebOS()) {
-      const mediaOpt = JSON.stringify({ htmlMediaOption: { useUMSMediaInfo: true } });
-      source.type = baseMime + ";mediaOption=" + mediaOpt;
-    } else source.type = baseMime;
-    video.appendChild(source);
-    video.load();
+    const streamUrl = videoSourceUrl(file);
+
+    if (attempt === 1) {
+      const source = document.createElement("source");
+      source.setAttribute("src", streamUrl);
+      source.setAttribute("type", "video/mp4;mediaOption=" + buildWebOSMediaOption());
+      source.addEventListener("error", () => {
+        if (sessionToken === playbackSessionToken && playbackAttempt === 1) {
+          startStreamAttempt(file, 2, sessionToken);
+        }
+      });
+      video.appendChild(source);
+      video.load();
+    } else {
+      video.src = streamUrl;
+      video.load();
+    }
+
+    startupWatchdog = setTimeout(() => {
+      if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
+      if (video.readyState === 0) {
+        if (attempt === 1) {
+          startStreamAttempt(file, 2, sessionToken);
+        } else {
+          showToast(
+            "A TV ainda não recebeu o stream (networkState=" + video.networkState +
+            ", readyState=" + video.readyState + "). Verifique a conexão.",
+            true
+          );
+        }
+      }
+    }, 7000);
+
+    video.play().then(() => {
+      if (sessionToken !== playbackSessionToken) return;
+      if (video.readyState >= 3) showToast("");
+      btnPlayPause.focus();
+      showHud();
+    }).catch(error => {
+      if (sessionToken !== playbackSessionToken) return;
+      if (error && error.name === "NotAllowedError") {
+        showToast("Pressione OK / Play no controle da TV para iniciar.", true);
+        btnPlayPause.focus();
+      }
+    });
   }
 
   async function play(index) {
@@ -661,6 +715,7 @@
     if (!file) return;
     currentVideoIndex = index;
     retriedAlternativeMime = false;
+    probedAudioForIndex = -1;
     mkvAudioHints = [];
     subtitleOffsetSec = 0;
     subSyncValue.textContent = "0.0s";
@@ -678,30 +733,14 @@
     availableSubtitles = findFolderSubtitles(file);
     if (availableSubtitles.length > 0) selectSubtitle(availableSubtitles[0], true);
     else selectSubtitle(null, true);
-    attachVideoSource(file, false);
+    const sessionToken = ++playbackSessionToken;
     startSubtitleLoop();
-    probeMkvAudioHints(file).then(hints => {
-      mkvAudioHints = hints;
-      if (hints.length > 0 && hints[0].codec) {
-        playerBadge.textContent = (formatSize(file.size) ? formatSize(file.size) + " • " : "") +
-          hints[0].codec + " • " + hints.length + " faixa(s) de áudio";
-      }
-      renderAudioMenu();
-    });
-    try {
-      await video.play();
-      showToast("");
-      btnPlayPause.focus();
-      showHud();
-    } catch (error) {
-      if (error && error.name === "NotAllowedError") {
-        showToast("Pressione OK / Play no controle da TV para iniciar.", true);
-        btnPlayPause.focus();
-      }
-    }
+    startStreamAttempt(file, 1, sessionToken);
   }
 
   function closePlayer(fromHistory) {
+    playbackSessionToken++;
+    clearTimeout(startupWatchdog);
     clearTimeout(hudTimer);
     clearTimeout(toastTimer);
     cancelAnimationFrame(subtitleRenderRaf);
@@ -721,12 +760,27 @@
   }
 
   video.addEventListener("loadedmetadata", () => {
+    clearTimeout(startupWatchdog);
     updateProgressUi();
     renderAudioMenu();
     if (video.videoWidth && video.videoHeight) {
       const res = video.videoWidth + "×" + video.videoHeight;
       if (playerBadge.textContent.indexOf(res) === -1)
         playerBadge.textContent = res + (playerBadge.textContent ? " • " + playerBadge.textContent : "");
+    }
+
+    const file = visibleVideos[currentVideoIndex];
+    if (file && probedAudioForIndex !== currentVideoIndex) {
+      probedAudioForIndex = currentVideoIndex;
+      probeMkvAudioHints(file).then(hints => {
+        if (currentVideoIndex !== probedAudioForIndex) return;
+        mkvAudioHints = hints;
+        if (hints.length > 0 && hints[0].codec) {
+          playerBadge.textContent = (playerBadge.textContent ? playerBadge.textContent + " • " : "") +
+            hints[0].codec + " • " + hints.length + " faixa(s)";
+        }
+        renderAudioMenu();
+      });
     }
   });
 
@@ -735,22 +789,33 @@
     video.audioTracks.addEventListener("change", renderAudioMenu);
   }
 
+  video.addEventListener("canplay", () => {
+    clearTimeout(startupWatchdog);
+    if (!video.paused) showToast("");
+  });
   video.addEventListener("playing", () => { btnPlayPause.textContent = "⏸ Pausar"; showToast(""); showHud(); });
   video.addEventListener("pause", () => { btnPlayPause.textContent = "▶ Play"; showHud(); });
   video.addEventListener("waiting", () => showToast("Carregando buffer…", true));
-  video.addEventListener("timeupdate", () => { updateProgressUi(); renderSubtitleOverlayNow(); });
+  video.addEventListener("seeked", () => {
+    if (!video.paused && video.readyState >= 3) showToast("");
+  });
+  video.addEventListener("timeupdate", () => {
+    updateProgressUi();
+    renderSubtitleOverlayNow();
+    if (!video.paused && video.readyState >= 3 &&
+        playbackMessage.textContent.indexOf("Carregando") !== -1) showToast("");
+  });
   video.addEventListener("progress", updateProgressUi);
   video.addEventListener("ended", () => { btnPlayPause.textContent = "▶ Play"; showHud(); });
 
   video.addEventListener("error", () => {
     if (player.classList.contains("hidden")) return;
     const file = visibleVideos[currentVideoIndex];
-    if (file && /\.mkv$/i.test(file.name || "") && !retriedAlternativeMime) {
-      retriedAlternativeMime = true;
-      attachVideoSource(file, true);
-      video.play().catch(() => {});
+    if (file && playbackAttempt === 1) {
+      startStreamAttempt(file, 2, playbackSessionToken);
       return;
     }
+    clearTimeout(startupWatchdog);
     const err = video.error;
     const codeMsg = err ? " (código " + err.code + ")" : "";
     showToast("Não foi possível reproduzir este arquivo na TV" + codeMsg + ".", true);
