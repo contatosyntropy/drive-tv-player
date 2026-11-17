@@ -162,6 +162,52 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
+      if (url.pathname === "/api/oauth/start") {
+        if (env && env.GOOGLE_REFRESH_TOKEN) {
+          return new Response("GOOGLE_REFRESH_TOKEN já está configurado.", { status: 403 });
+        }
+        if (!env || !env.GOOGLE_CLIENT_ID) {
+          return new Response("Salve GOOGLE_CLIENT_ID na Cloudflare antes de acessar.", { status: 400 });
+        }
+        const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+        authUrl.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
+        authUrl.searchParams.set("redirect_uri", url.origin + "/api/oauth/callback");
+        authUrl.searchParams.set("response_type", "code");
+        authUrl.searchParams.set("scope", "https://www.googleapis.com/auth/drive.readonly");
+        authUrl.searchParams.set("access_type", "offline");
+        authUrl.searchParams.set("prompt", "consent");
+        return Response.redirect(authUrl.toString(), 302);
+      }
+
+      if (url.pathname === "/api/oauth/callback") {
+        if (env && env.GOOGLE_REFRESH_TOKEN) {
+          return new Response("GOOGLE_REFRESH_TOKEN já está configurado.", { status: 403 });
+        }
+        const code = url.searchParams.get("code");
+        if (!code) {
+          return new Response("Código ausente: " + (url.searchParams.get("error") || "erro"), { status: 400 });
+        }
+        const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            code,
+            client_id: env.GOOGLE_CLIENT_ID,
+            client_secret: env.GOOGLE_CLIENT_SECRET,
+            redirect_uri: url.origin + "/api/oauth/callback",
+            grant_type: "authorization_code"
+          }).toString()
+        });
+        const data = await tokenResp.json();
+        if (!tokenResp.ok || !data.refresh_token) {
+          return new Response("Falha ao obter token: " + JSON.stringify(data), { status: 400 });
+        }
+        return new Response(
+          "Copie e salve como GOOGLE_REFRESH_TOKEN na Cloudflare:\n\n" + data.refresh_token,
+          { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } }
+        );
+      }
+
       if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
         return jsonError("Método não permitido.", 405);
       }
