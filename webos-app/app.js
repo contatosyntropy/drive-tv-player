@@ -108,24 +108,37 @@
     return url;
   }
 
-  async function probeMkvAudioHints(file) {
-    if (!/\.mkv$/i.test(file.name || "")) return [];
+  async function inspectMkvMedia(file) {
+    const result = {
+      httpStatus: 0, httpError: "", networkError: "", contentType: "",
+      bytesRead: 0, videoTracks: [], audioTracks: []
+    };
+    if (!/\.mkv$/i.test(file.name || "")) return result;
     try {
       const response = await fetch(videoSourceUrl(file), {
         method: "GET",
-        headers: { Range: "bytes=0-131071" },
+        headers: { Range: "bytes=0-262143" },
         cache: "no-store"
       });
-      if (!response.ok && response.status !== 206) return [];
+      result.httpStatus = response.status;
+      result.contentType = response.headers.get("content-type") || "";
+      if (!response.ok && response.status !== 206) {
+        let detail = "";
+        try {
+          const data = await response.json();
+          detail = data && data.error ? data.error : "";
+        } catch (_) {}
+        result.httpError = detail || ("HTTP " + response.status + " " + response.statusText);
+        return result;
+      }
       const buf = new Uint8Array(await response.arrayBuffer());
+      result.bytesRead = buf.length;
       let pos = 0;
       const readVintId = offset => {
         if (offset >= buf.length) return null;
         const b0 = buf[offset];
         let width = 0;
-        for (let i = 0; i < 4; i++) {
-          if (b0 & (0x80 >> i)) { width = i + 1; break; }
-        }
+        for (let i = 0; i < 4; i++) if (b0 & (0x80 >> i)) { width = i + 1; break; }
         if (!width || offset + width > buf.length) return null;
         let id = 0;
         for (let i = 0; i < width; i++) id = id * 256 + buf[offset + i];
@@ -135,9 +148,7 @@
         if (offset >= buf.length) return null;
         const b0 = buf[offset];
         let width = 0;
-        for (let i = 0; i < 8; i++) {
-          if (b0 & (0x80 >> i)) { width = i + 1; break; }
-        }
+        for (let i = 0; i < 8; i++) if (b0 & (0x80 >> i)) { width = i + 1; break; }
         if (!width || offset + width > buf.length) return null;
         const mask = 0xff >>> width;
         let val = b0 & mask;
@@ -149,65 +160,70 @@
         }
         return { size: allOnes ? null : val, width };
       };
-      const decodeUtf8 = (start, len) => {
-        try { return new TextDecoder("utf-8").decode(buf.subarray(start, start + len)).replace(/\0+$/, ""); }
+      const decodeUtf8 = (offset, length) => {
+        try { return new TextDecoder("utf-8").decode(buf.subarray(offset, offset + length)).replace(/\0+$/, ""); }
         catch (_) { return ""; }
       };
-      const audioTracks = [];
-      let inTracks = false;
-      let tracksEnd = buf.length;
-      let inEntry = false;
-      let entryEnd = 0;
-      let current = null;
+      let inTracks = false, tracksEnd = buf.length, inEntry = false, entryEnd = 0, current = null;
+      const finishTrack = () => {
+        if (!current) return;
+        if (current.type === 1) result.videoTracks.push(current);
+        else if (current.type === 2) result.audioTracks.push(current);
+        current = null;
+      };
       while (pos + 2 < buf.length) {
-        if (inEntry && pos >= entryEnd) {
-          if (current && current.type === 2) audioTracks.push(current);
-          inEntry = false;
-          current = null;
-        }
+        if (inEntry && pos >= entryEnd) { finishTrack(); inEntry = false; }
         if (inTracks && pos >= tracksEnd) break;
         const idInfo = readVintId(pos);
         if (!idInfo) break;
         const sizeInfo = readVintSize(pos + idInfo.width);
         if (!sizeInfo) break;
-        const headerLen = idInfo.width + sizeInfo.width;
-        const dataStart = pos + headerLen;
+        const dataStart = pos + idInfo.width + sizeInfo.width;
         const size = sizeInfo.size;
         if (idInfo.id === 0x18538067) { pos = dataStart; continue; }
         if (idInfo.id === 0x1654ae6b) {
           inTracks = true;
           tracksEnd = size !== null ? Math.min(buf.length, dataStart + size) : buf.length;
-          pos = dataStart;
-          continue;
+          pos = dataStart; continue;
         }
         if (idInfo.id === 0xae && inTracks) {
+          if (inEntry) finishTrack();
           inEntry = true;
           entryEnd = size !== null ? Math.min(tracksEnd, dataStart + size) : tracksEnd;
-          current = { type: 0, name: "", lang: "", codec: "" };
-          pos = dataStart;
-          continue;
+          current = { type: 0, name: "", lang: "", codec: "", avcProfile: null, bitDepth: null };
+          pos = dataStart; continue;
         }
-        if (idInfo.id === 0x1f43b675) break;
+        if (idInfo.id === 0x1f43b675) { if (inEntry) finishTrack(); break; }
         if (size === null || dataStart + size > buf.length) break;
         if (inEntry && current) {
           if (idInfo.id === 0x83) {
-            let v = 0;
-            for (let i = 0; i < size; i++) v = v * 256 + buf[dataStart + i];
-            current.type = v;
-          } else if (idInfo.id === 0x536e) {
-            current.name = decodeUtf8(dataStart, size);
-          } else if (idInfo.id === 0x22b59c || idInfo.id === 0x22b59d) {
-            const langVal = decodeUtf8(dataStart, size);
-            if (langVal && langVal !== "und") current.lang = langVal;
-          } else if (idInfo.id === 0x86) {
-            current.codec = decodeUtf8(dataStart, size).replace(/^A_/, "");
+            let value = 0;
+            for (let i = 0; i < size; i++) value = value * 256 + buf[dataStart + i];
+            current.type = value;
+          } else if (idInfo.id === 0x536e) current.name = decodeUtf8(dataStart, size);
+          else if (idInfo.id === 0x22b59c || idInfo.id === 0x22b59d) {
+            const lang = decodeUtf8(dataStart, size);
+            if (lang && lang !== "und") current.lang = lang;
+          } else if (idInfo.id === 0x86) current.codec = decodeUtf8(dataStart, size);
+          else if (idInfo.id === 0x63a2 && size >= 4) {
+            // AVCDecoderConfigurationRecord: configurationVersion, AVCProfileIndication, profile_compatibility, AVCLevelIndication.
+            current.avcProfile = buf[dataStart + 1];
+          } else if (idInfo.id === 0x55b0 && size > 0) {
+            current.bitDepth = buf[dataStart + size - 1];
           }
         }
         pos = dataStart + size;
       }
-      if (inEntry && current && current.type === 2) audioTracks.push(current);
-      return audioTracks;
-    } catch (_) { return []; }
+      if (inEntry && current) finishTrack();
+      return result;
+    } catch (error) {
+      result.networkError = error && error.message ? error.message : String(error || "Falha de rede");
+      return result;
+    }
+  }
+
+  function probeMkvAudioHints(file) {
+    return inspectMkvMedia(file).then(result => result.audioTracks || []);
   }
 
   function friendlyLangName(code) {
@@ -660,7 +676,60 @@
         }
       }
     };
-    return encodeURIComponent(JSON.stringify(options));
+    return encodeURI(JSON.stringify(options));
+  }
+
+  async function diagnosePlaybackFailure(file, sessionToken) {
+    if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
+    const mediaError = video.error;
+    const errorCode = mediaError ? mediaError.code : 0;
+    const errorNames = { 1: "MEDIA_ERR_ABORTED", 2: "MEDIA_ERR_NETWORK", 3: "MEDIA_ERR_DECODE", 4: "MEDIA_ERR_SRC_NOT_SUPPORTED" };
+    const browserMessage = mediaError && mediaError.message ? mediaError.message : "";
+    showToast("Código " + (errorCode || "desconhecido") + " — analisando MKV e conexão…", true);
+    const report = await inspectMkvMedia(file);
+    if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
+    const videoTrack = report.videoTracks[0];
+    const audioTrack = report.audioTracks[0];
+    const codecParts = [];
+    if (videoTrack) {
+      let videoLabel = videoTrack.codec || "codec de vídeo não identificado";
+      if (videoTrack.avcProfile !== null && videoTrack.avcProfile !== undefined) {
+        const profileNames = { 66: "Baseline", 77: "Main", 88: "Extended", 100: "High", 110: "High 10 (10-bit)", 122: "High 4:2:2", 244: "High 4:4:4" };
+        videoLabel += " / perfil " + (profileNames[videoTrack.avcProfile] || videoTrack.avcProfile);
+      }
+      codecParts.push("Vídeo: " + videoLabel);
+    } else codecParts.push("Vídeo: faixa não identificada");
+    if (audioTrack) codecParts.push("Áudio: " + (audioTrack.codec || "codec não identificado"));
+    else codecParts.push("Áudio: faixa não identificada");
+    let diagnosis = "";
+    if (videoTrack && /V_MPEG4\/ISO\/AVC/i.test(videoTrack.codec) && videoTrack.avcProfile === 110) {
+      diagnosis = "H.264 High 10 / Hi10P (10-bit): incompatível com a decodificação H.264 por hardware da TV. ";
+    } else if (videoTrack && /V_MPEGH\/ISO\/HEVC/i.test(videoTrack.codec)) {
+      diagnosis = "Vídeo HEVC/H.265 detectado; perfil, nível e profundidade podem exceder o suporte do modelo. ";
+    } else if (videoTrack && /V_AV1/i.test(videoTrack.codec)) {
+      diagnosis = "AV1 detectado; não presumir suporte por hardware neste modelo webOS 6. ";
+    }
+    const networkParts = [];
+    if (report.httpStatus) networkParts.push("HTTP " + report.httpStatus);
+    if (report.httpError) networkParts.push("Resposta do servidor: " + report.httpError);
+    if (report.networkError) networkParts.push("Rede: " + report.networkError);
+    if (!networkParts.length) networkParts.push("Rede: inspeção respondeu; " + report.bytesRead + " bytes lidos");
+    const details = [
+      diagnosis + "Falha " + (errorNames[errorCode] || "de reprodução") + " (código " + (errorCode || "?") + ").",
+      codecParts.join(" | "),
+      networkParts.join(" | "),
+      "MIME: " + (report.contentType || "não informado"),
+      browserMessage ? "video.error.message: " + browserMessage : "video.error.message: indisponível no webOS"
+    ];
+    showToast(details.join(" — "), true);
+    showHud();
+    console.error("[Drive TV Player] Diagnóstico de reprodução", {
+      file: file.name, errorCode, errorName: errorNames[errorCode] || "unknown",
+      videoErrorMessage: browserMessage, httpStatus: report.httpStatus,
+      httpError: report.httpError, networkError: report.networkError,
+      contentType: report.contentType, bytesRead: report.bytesRead,
+      videoTracks: report.videoTracks, audioTracks: report.audioTracks
+    });
   }
 
   function triggerNextAttempt(file, sessionToken, failedAttempt) {
@@ -679,10 +748,8 @@
       return;
     }
     clearTimeout(startupWatchdog);
-    const err = video.error;
-    const codeMsg = err ? " (código " + err.code + ")" : "";
-    showToast("Não foi possível reproduzir este arquivo na TV" + codeMsg + ".", true);
-    showHud();
+    diagnosePlaybackFailure(file, sessionToken);
+
   }
 
   function startStreamAttempt(file, attempt, sessionToken) {
@@ -793,12 +860,12 @@
     const file = visibleVideos[currentVideoIndex];
     if (file && probedAudioForIndex !== currentVideoIndex) {
       probedAudioForIndex = currentVideoIndex;
-      probeMkvAudioHints(file).then(hints => {
+      inspectMkvMedia(file).then(probe => {
         if (currentVideoIndex !== probedAudioForIndex) return;
-        mkvAudioHints = hints;
-        if (hints.length > 0 && hints[0].codec) {
+        mkvAudioHints = probe.audioTracks || [];
+        if (mkvAudioHints.length > 0 && mkvAudioHints[0].codec) {
           playerBadge.textContent = (playerBadge.textContent ? playerBadge.textContent + " • " : "") +
-            hints[0].codec + " • " + hints.length + " faixa(s)";
+            mkvAudioHints[0].codec + " • " + mkvAudioHints.length + " faixa(s)";
         }
         renderAudioMenu();
       });
