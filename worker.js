@@ -239,6 +239,20 @@ export default {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
       }
 
+      if (url.pathname === "/api/oauth/status") {
+        if (request.method !== "GET") {
+          return jsonError("Método não permitido.", 405);
+        }
+        return new Response(JSON.stringify({
+          hasClientId: Boolean(env.GOOGLE_CLIENT_ID),
+          hasClientSecret: Boolean(env.GOOGLE_CLIENT_SECRET),
+          hasRefreshToken: Boolean(env.GOOGLE_REFRESH_TOKEN)
+        }), {
+          status: 200,
+          headers: JSON_HEADERS
+        });
+      }
+
       let accessToken;
       try {
         accessToken = await getDriveAccessToken(env);
