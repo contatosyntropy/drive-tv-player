@@ -89,12 +89,12 @@
     video.load();
   }
   function showControls() {
-    setControlsVisible(true);
+    player.classList.remove("controls-hidden");
     clearTimeout(controlTimer);
     if (!video.paused) {
       controlTimer = setTimeout(() => {
         if (activeMode === "native" && audioMenu.classList.contains("hidden") && subtitleMenu.classList.contains("hidden") &&
-            !isInteractiveFocus()) setControlsVisible(false);
+            !isInteractiveFocus()) player.classList.add("controls-hidden");
       }, 5000);
     }
   }
@@ -162,7 +162,7 @@
       items = files.filter(file => (file.mimeType && file.mimeType.startsWith("video/")) || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
       const episodeCode = name => {
-        const match = name.match(/S(\\d{1,2})E(\\d{1,3})/i);
+        const match = name.match(/S(\d{1,2})E(\d{1,3})/i);
         return match ? { season: Number(match[1]), episode: Number(match[2]) } : null;
       };
       items.sort((a, b) => {
