@@ -227,18 +227,6 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      if (url.pathname.startsWith("/api/oauth/")) {
-        return new Response("Autorização OAuth já concluída. Esta rota foi desativada.", { status: 410 });
-      }
-
-      if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
-        return jsonError("Método não permitido.", 405);
-      }
-
-      if (request.method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: CORS_HEADERS });
-      }
-
       if (url.pathname === "/api/oauth/status") {
         if (request.method !== "GET") {
           return jsonError("Método não permitido.", 405);
@@ -251,6 +239,18 @@ export default {
           status: 200,
           headers: JSON_HEADERS
         });
+      }
+
+      if (url.pathname.startsWith("/api/oauth/")) {
+        return new Response("Autorização OAuth já concluída. Esta rota foi desativada.", { status: 410 });
+      }
+
+      if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
+        return jsonError("Método não permitido.", 405);
+      }
+
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: CORS_HEADERS });
       }
 
       let accessToken;
