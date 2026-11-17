@@ -39,10 +39,11 @@
     if (!engine) return;
     try { engine.FS("unlink", "/input.mkv"); } catch (_) {}
     try { engine.FS("unlink", "/index.m3u8"); } catch (_) {}
+    try { engine.FS("unlink", "/init.mp4"); } catch (_) {}
     try {
       const entries = engine.FS("readdir", "/");
       entries.forEach(name => {
-        if (/^segment_\d+\.ts$/.test(name)) {
+        if (/^segment_\d+\.(ts|m4s)$/.test(name)) {
           try { engine.FS("unlink", "/" + name); } catch (_) {}
         }
       });
@@ -119,6 +120,8 @@
 
       message("Leitura HTTP por partes confirmada. Convertendo o áudio para AAC…");
       await engine.run(
+        "-analyzeduration", "10000000",
+        "-probesize", "10000000",
         "-fflags", "+genpts",
         "-i", "/input.mkv",
         "-t", String(MAX_TEST_SECONDS),
@@ -129,35 +132,49 @@
         "-b:a", "192k",
         "-ac", "2",
         "-avoid_negative_ts", "make_zero",
-        "-max_interleave_delta", "0",
-        "-muxdelay", "0",
-        "-muxpreload", "0",
         "-f", "hls",
         "-hls_time", "10",
         "-hls_playlist_type", "vod",
+        "-hls_segment_type", "fmp4",
+        "-hls_fmp4_init_filename", "init.mp4",
         "-hls_flags", "independent_segments",
-        "-hls_segment_filename", "/segment_%03d.ts",
+        "-hls_segment_filename", "/segment_%03d.m4s",
         "/index.m3u8"
       );
 
       let playlist = new TextDecoder("utf-8").decode(engine.FS("readFile", "/index.m3u8"));
-      const names = engine.FS("readdir", "/").filter(name => /^segment_\d+\.ts$/.test(name)).sort();
-      if (!names.length) throw new Error("O FFmpeg terminou sem gerar segmentos HLS.");
+      const rootEntries = engine.FS("readdir", "/");
+      const segmentNames = rootEntries.filter(name => /^segment_\d+\.m4s$/.test(name)).sort();
+      if (!segmentNames.length) throw new Error("O FFmpeg terminou sem gerar segmentos HLS.");
 
       const urlsByName = {};
-      names.forEach(name => {
+      if (rootEntries.includes("init.mp4")) {
+        const initBytes = engine.FS("readFile", "/init.mp4");
+        const initUrl = URL.createObjectURL(new Blob([initBytes], { type: "video/mp4" }));
+        objectUrls.push(initUrl);
+        urlsByName["init.mp4"] = initUrl;
+      }
+
+      segmentNames.forEach(name => {
         const bytes = engine.FS("readFile", "/" + name);
-        const url = URL.createObjectURL(new Blob([bytes], { type: "video/mp2t" }));
+        const url = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
         objectUrls.push(url);
         urlsByName[name] = url;
       });
 
-      // Libera os arquivos do MEMFS assim que os Blobs são criados para economizar RAM na TV.
       cleanupVirtualFs(engine);
 
       playlist = playlist
         .split(/\r?\n/)
-        .map(line => urlsByName[line.trim()] || line)
+        .map(line => {
+          const trimmed = line.trim();
+          if (trimmed.startsWith("#EXT-X-MAP:")) {
+            return trimmed.replace(/URI="([^"]+)"/, (_match, uri) => {
+              return urlsByName[uri] ? `URI="${urlsByName[uri]}"` : `URI="${uri}"`;
+            });
+          }
+          return urlsByName[trimmed] || line;
+        })
         .join("\n");
 
       const playlistUrl = URL.createObjectURL(new Blob([playlist], { type: "application/vnd.apple.mpegurl" }));
