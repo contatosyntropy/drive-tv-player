@@ -1,16 +1,30 @@
 (() => {
+  "use strict";
   const config = window.APP_CONFIG || {};
   const grid = document.getElementById("videos");
   const message = document.getElementById("message");
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
-  const driveFrame = document.getElementById("drive-frame");
   const closeBtn = document.getElementById("close-player");
-  const playbackMessage = document.getElementById("playback-message");
-
+  const titleNode = document.getElementById("player-title");
+  const playBtn = document.getElementById("play-pause");
+  const seek = document.getElementById("seek");
+  const currentTimeNode = document.getElementById("current-time");
+  const durationNode = document.getElementById("duration");
+  const audioButton = document.getElementById("audio-button");
+  const audioMenu = document.getElementById("audio-menu");
+  const subtitleButton = document.getElementById("subtitle-button");
+  const subtitleMenu = document.getElementById("subtitle-menu");
+  const subtitleSelect = document.getElementById("subtitle-select");
+  const subtitleOverlay = document.getElementById("subtitle-overlay");
+  const subtitleSyncValue = document.getElementById("subtitle-sync-value");
+  const subtitleSize = document.getElementById("subtitle-size");
+  const volumeButton = document.getElementById("volume-button");
+  const volumeRange = document.getElementById("volume-range");
   const supported = /(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
-  const subtitlePattern = /(srt|vtt)$/i;
+  const subtitlePattern = /\.(srt|vtt)$/i;
+  const folderMime = "application/vnd.google-apps.folder";
 
   let items = [];
   let subtitleFiles = [];
@@ -18,12 +32,17 @@
   let currentFolderId = config.folderId;
   let visibleVideos = [];
   let currentVideoIndex = -1;
+  let currentFile = null;
   let activeMode = "none";
-  let subtitleUrl = null;
+  let activeMime = "";
+  let subtitleCues = [];
+  let subtitleOffset = 0;
+  let subtitleFontSize = "medium";
   let subtitleLoadToken = 0;
-  let playerHistoryActive = false;
   let backBtnTimer = null;
-  let messageTimer = null;
+  let controlTimer = null;
+  let controlsVisible = true;
+  let audioTracksAvailable = false;
 
   const formatSize = bytes => {
     if (!bytes) return "";
@@ -33,51 +52,75 @@
     return n.toFixed(i ? 1 : 0) + " " + units[i];
   };
 
-  function setMessage(text) {
-    message.textContent = text;
+  function setMessage(text) { message.textContent = text; }
+  function apiUrl(path) { return (config.apiBaseUrl || "").replace(/\/$/, "") + path; }
+  function videoSourceUrl(file, mime) {
+    const path = "/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name || "video.mp4");
+    let url = apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
+    if (mime === "matroska") url += "&mime=matroska";
+    if (mime === "mp4") url += "&mime=mp4";
+    return url;
   }
-
-  function setPlaybackMessage(text, persistent = false) {
-    if (!playbackMessage) return;
-    clearTimeout(messageTimer);
-    if (!text) {
-      playbackMessage.textContent = "";
-      playbackMessage.classList.add("hidden");
-      return;
-    }
-    playbackMessage.textContent = text;
-    playbackMessage.classList.remove("hidden");
-    if (!persistent) {
-      messageTimer = setTimeout(() => {
-        playbackMessage.classList.add("hidden");
-      }, 4500);
+  function formatTime(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
+    const total = Math.floor(seconds);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return (h ? String(h).padStart(2, "0") + ":" : "") +
+      String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+  }
+  function mediaOptionType(mime) {
+    const options = {};
+    return mime + ";mediaOption=" + encodeURI(JSON.stringify(options));
+  }
+  function clearVideoSources() {
+    video.pause();
+    while (video.firstChild) video.removeChild(video.firstChild);
+    video.removeAttribute("src");
+    video.load();
+  }
+  function appendVideoSource(file, mime) {
+    clearVideoSources();
+    const source = document.createElement("source");
+    source.src = videoSourceUrl(file, mime);
+    source.type = mediaOptionType(mime === "matroska" ? "video/x-matroska" : mime === "mp4" ? "video/mp4" : mime);
+    video.appendChild(source);
+    activeMime = mime;
+    video.load();
+  }
+  function setControlsVisible(visible) {
+    controlsVisible = visible;
+    player.classList.toggle("controls-hidden", !visible);
+    if (visible) {
+      clearTimeout(controlTimer);
+      controlTimer = setTimeout(() => {
+        if (!video.paused && activeMode === "native" && !audioMenu.classList.contains("hidden") === false &&
+            !subtitleMenu.classList.contains("hidden") === false) setControlsVisible(false);
+      }, 5000);
     }
   }
-
+  function showControls() {
+    setControlsVisible(true);
+    clearTimeout(controlTimer);
+    if (!video.paused) {
+      controlTimer = setTimeout(() => {
+        if (activeMode === "native" && audioMenu.classList.contains("hidden") && subtitleMenu.classList.contains("hidden") &&
+            !isInteractiveFocus()) setControlsVisible(false);
+      }, 5000);
+    }
+  }
+  function isInteractiveFocus() {
+    const el = document.activeElement;
+    return !!el && (el === audioMenu || audioMenu.contains(el) || el === subtitleMenu || subtitleMenu.contains(el) ||
+      el === closeBtn || el === playBtn || el === seek || el === audioButton || el === subtitleButton);
+  }
   function showBackButtonTemporarily() {
-    if (!closeBtn) return;
     closeBtn.classList.remove("autohide");
     clearTimeout(backBtnTimer);
     backBtnTimer = setTimeout(() => {
       if (!player.classList.contains("hidden")) closeBtn.classList.add("autohide");
     }, 3500);
-  }
-
-  function apiUrl(path) {
-    const base = (config.apiBaseUrl || "").replace(/$/, "");
-    return base + path;
-  }
-
-  function videoSourceUrl(file, forceMatroskaMime = false) {
-    const path = "/api/video/" + encodeURIComponent(file.id) + "/" +
-      encodeURIComponent(file.name || "video.mp4");
-    let url = apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
-    if (forceMatroskaMime) url += "&mime=matroska";
-    return url;
-  }
-
-  function drivePreviewUrl(file) {
-    return "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
   }
 
   const folderMime = "application/vnd.google-apps.folder";
@@ -222,221 +265,312 @@
     });
   }
 
-  function clearSubtitle() {
-    subtitleLoadToken++;
-    if (video) {
-      video.querySelectorAll("track").forEach(track => track.remove());
-    }
-    if (subtitleUrl) URL.revokeObjectURL(subtitleUrl);
-    subtitleUrl = null;
-    
-  }
 
-  function findSubtitle(videoFile) {
-    const videoBase = videoFile.name.replace(/[^.]+$/, "").trim().toLocaleLowerCase();
-    const sameFolder = subtitleFiles.find(file =>
-      (file.folderPath || "") === (videoFile.folderPath || "") &&
-      file.name.replace(/(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
-    );
-    if (sameFolder) return sameFolder;
-    const matches = subtitleFiles.filter(file =>
-      file.name.replace(/(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
-    );
-    return matches.length === 1 ? matches[0] : null;
+  function subtitleStem(name) {
+    return name.replace(/\.(srt|vtt)$/i, "").toLocaleLowerCase();
   }
-
-  function decodeSubtitle(buffer, contentType) {
+  function findSubtitles(file) {
+    const stem = (file.name || "").replace(/\.[^.]+$/, "").toLocaleLowerCase();
+    return subtitleFiles.filter(sub => {
+      if ((sub.parentFolderId || "") !== (file.parentFolderId || "")) return false;
+      const candidate = subtitleStem(sub.name || "");
+      return candidate === stem || candidate.indexOf(stem + ".") === 0 ||
+        candidate.indexOf(stem + "_") === 0 || candidate.indexOf(stem + "-") === 0;
+    }).sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" }));
+  }
+  async function decodeSubtitle(buffer) {
     const bytes = new Uint8Array(buffer);
     if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
       return new TextDecoder("utf-8").decode(bytes.subarray(3));
     }
-    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
-      return new TextDecoder("utf-16le").decode(bytes.subarray(2));
-    }
-    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
-      return new TextDecoder("utf-16be").decode(bytes.subarray(2));
-    }
-    const declared = (contentType || "").match(/charset=([^;]+)/i);
-    if (declared) {
-      try { return new TextDecoder(declared[1].replace(/["']/g, "").trim()).decode(bytes); } catch (_) {}
-    }
-    try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch (_) {
-      return new TextDecoder("windows-1252").decode(bytes);
-    }
+    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+    try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+    catch (_) { return new TextDecoder("windows-1252").decode(bytes); }
   }
-
-  async function loadSubtitle(videoFile) {
-    clearSubtitle();
-    const requestToken = subtitleLoadToken;
-    const subtitle = findSubtitle(videoFile);
-    if (!subtitle) return;
-    try {
-      const url = apiUrl("/api/subtitle/" + encodeURIComponent(subtitle.id)) +
-        "?key=" + encodeURIComponent(config.apiKey);
-      const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || data.message || "HTTP " + response.status);
+  function timeToSeconds(value) {
+    const m = value.trim().replace(",", ".").match(/^(\d{1,2}):(\d{2}):(\d{2})\.(\d{1,3})$/);
+    if (!m) return NaN;
+    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(("0." + m[4]));
+  }
+  function parseSubtitle(text, isSrt) {
+    let normalized = text.replace(/^\uFEFF/, "").replace(/\r/g, "");
+    if (isSrt) normalized = normalized.replace(/(\d{1,2}:\d{2}:\d{2}),(\d{1,3})/g, "$1.$2");
+    const blocks = normalized.split(/\n\s*\n/);
+    const cues = [];
+    blocks.forEach(block => {
+      const lines = block.split("\n");
+      const timeIndex = lines.findIndex(line => line.indexOf("-->") >= 0);
+      if (timeIndex < 0) return;
+      const times = lines[timeIndex].split("-->");
+      const start = timeToSeconds(times[0]);
+      const end = timeToSeconds((times[1] || "").trim().split(/\s+/)[0]);
+      const body = lines.slice(timeIndex + 1).join("\n").trim();
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start && body) {
+        cues.push({ start: start, end: end, text: body.replace(/<[^>]*>/g, "") });
       }
-      const buffer = await response.arrayBuffer();
-      if (requestToken !== subtitleLoadToken) return;
-      if (!buffer.byteLength) throw new Error("O arquivo de legenda está vazio.");
-      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^FEFF/, "");
-      if (/srt$/i.test(subtitle.name)) {
-        content = "WEBVTT" + content
-          .replace(/({2}:{2}:{2}),({3})/g, "$1.$2")
-          .replace(/^*+*$/gm, "");
-      } else if (!content.trimStart().startsWith("WEBVTT")) {
-        content = "WEBVTT" + content;
+    });
+    return cues;
+  }
+  function clearSubtitles() {
+    subtitleLoadToken++;
+    subtitleCues = [];
+    subtitleOverlay.textContent = "";
+    subtitleSelect.innerHTML = '<option value="">Desativadas</option>';
+    subtitleSyncValue.textContent = "0,0s";
+  }
+  async function loadSubtitleOption(file, token) {
+    const url = apiUrl("/api/subtitle/" + encodeURIComponent(file.id)) + "?key=" + encodeURIComponent(config.apiKey);
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const buffer = await response.arrayBuffer();
+    if (token !== subtitleLoadToken) return [];
+    const text = await decodeSubtitle(buffer);
+    return parseSubtitle(text, /\.srt$/i.test(file.name || ""));
+  }
+  async function loadSubtitleChoices(file) {
+    clearSubtitles();
+    const token = subtitleLoadToken;
+    const matches = findSubtitles(file);
+    if (!matches.length) {
+      subtitleButton.disabled = true;
+      subtitleButton.textContent = "Legendas —";
+      return;
+    }
+    subtitleButton.disabled = false;
+    subtitleButton.textContent = "Legendas";
+    for (let i = 0; i < matches.length; i++) {
+      if (token !== subtitleLoadToken) return;
+      const option = document.createElement("option");
+      option.value = String(i);
+      option.textContent = matches[i].name.replace(/\.(srt|vtt)$/i, "");
+      option.dataset.fileId = matches[i].id;
+      subtitleSelect.appendChild(option);
+      try {
+        matches[i].parsedCues = await loadSubtitleOption(matches[i], token);
+      } catch (error) {
+        console.warn("Não foi possível carregar a legenda " + matches[i].name, error);
+        option.disabled = true;
+        option.textContent += " (indisponível)";
       }
-      if (requestToken !== subtitleLoadToken) return;
-      subtitleUrl = URL.createObjectURL(new Blob([content], { type: "text/vtt;charset=utf-8" }));
-      const track = document.createElement("track");
-      track.kind = "subtitles";
-      track.label = "Português";
-      track.srclang = "pt";
-      track.src = subtitleUrl;
-      track.default = true;
-      video.appendChild(track);
-      track.track.mode = "showing";
-      
-    } catch (error) {
-      if (requestToken !== subtitleLoadToken) return;
-      console.error("Falha ao carregar legenda:", subtitle.name, error);
-      setPlaybackMessage("Legenda indisponível (" + subtitle.name + "): " + error.message);
+    }
+    subtitleSelect._subtitleFiles = matches;
+    if (matches.length) {
+      const firstAvailable = matches.findIndex(file => file.parsedCues && file.parsedCues.length);
+      if (firstAvailable >= 0) {
+        subtitleSelect.value = String(firstAvailable);
+        subtitleCues = matches[firstAvailable].parsedCues;
+        subtitleOverlay.classList.remove("hidden");
+        updateSubtitleOverlay();
+      }
     }
   }
-
-  function switchToDrivePlayer(file) {
-    if (!file) return;
-    activeMode = "drive";
-    clearSubtitle();
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-    video.classList.add("hidden");
-    driveFrame.classList.remove("hidden");
-    driveFrame.src = drivePreviewUrl(file);
-    showBackButtonTemporarily();
-    driveFrame.focus();
+  function updateSubtitleOverlay() {
+    if (!subtitleCues.length || video.paused && video.readyState < 2) {
+      subtitleOverlay.textContent = "";
+      return;
+    }
+    const now = video.currentTime + subtitleOffset;
+    const active = subtitleCues.filter(cue => now >= cue.start && now <= cue.end);
+    subtitleOverlay.textContent = active.map(cue => cue.text).join("\n");
+    subtitleOverlay.classList.toggle("hidden", active.length === 0);
+    subtitleOverlay.classList.remove("size-small", "size-medium", "size-large");
+    subtitleOverlay.classList.add("size-" + subtitleFontSize);
   }
-
-  async function play(index) {
+  function setSubtitleSelection(value) {
+    if (value === "") {
+      subtitleCues = [];
+      subtitleOverlay.textContent = "";
+      subtitleOverlay.classList.add("hidden");
+      return;
+    }
+    const files = subtitleSelect._subtitleFiles || [];
+    const selected = files[Number(value)];
+    subtitleCues = selected && selected.parsedCues ? selected.parsedCues : [];
+    updateSubtitleOverlay();
+  }
+  function renderAudioTracks() {
+    audioMenu.innerHTML = "";
+    const tracks = video.audioTracks;
+    if (!tracks || !tracks.length) {
+      audioButton.disabled = true;
+      audioButton.textContent = "Áudio —";
+      audioTracksAvailable = false;
+      return;
+    }
+    audioTracksAvailable = true;
+    audioButton.disabled = false;
+    audioButton.textContent = "Áudio";
+    for (let i = 0; i < tracks.length; i++) {
+      const track = tracks[i];
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "menu-option";
+      const label = track.label || track.language || ("Faixa " + (i + 1));
+      button.textContent = (track.enabled ? "✓ " : "") + label;
+      button.addEventListener("click", () => {
+        for (let j = 0; j < tracks.length; j++) tracks[j].enabled = j === i;
+        renderAudioTracks();
+        audioMenu.classList.add("hidden");
+        audioButton.focus();
+      });
+      audioMenu.appendChild(button);
+    }
+  }
+  function toggleMenu(menu) {
+    const opening = menu.classList.contains("hidden");
+    audioMenu.classList.add("hidden");
+    subtitleMenu.classList.add("hidden");
+    if (opening) {
+      menu.classList.remove("hidden");
+      const first = menu.querySelector("button,select");
+      if (first) first.focus();
+      showControls();
+    }
+  }
+  function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
     currentVideoIndex = index;
+    currentFile = file;
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
-    if (!playerHistoryActive) {
-      history.pushState({ drivePlayer: true }, "", "#player");
-      playerHistoryActive = true;
-    }
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-    video.classList.add("hidden");
-    driveFrame.src = "about:blank";
-    driveFrame.classList.add("hidden");
-    clearSubtitle();
-    if (/\.mkv$/i.test(file.name || "")) {
-      switchToDrivePlayer(file);
-      return;
-    }
+    titleNode.textContent = file.name;
+    clearSubtitles();
+    audioMenu.classList.add("hidden");
+    subtitleMenu.classList.add("hidden");
+    clearVideoSources();
     activeMode = "native";
-    video.classList.remove("hidden");
-    showBackButtonTemporarily();
-    await loadSubtitle(file);
-    video.src = videoSourceUrl(file);
-    video.load();
-    try { await video.play(); } catch (error) {
-      if (error && error.name === "NotAllowedError") { /* aguarda Play pelo controle */ }
+    const isMkv = /\.mkv$/i.test(file.name || "");
+    if (isMkv) appendVideoSource(file, "matroska");
+    else {
+      const ext = ((file.name || "").match(/\.([^.]+)$/) || [])[1];
+      const mimeMap = { mp4: "video/mp4", m4v: "video/mp4", mov: "video/mp4", webm: "video/webm", ogv: "video/ogg", ogg: "video/ogg" };
+      appendVideoSource(file, mimeMap[(ext || "").toLowerCase()] || "video/mp4");
     }
+    showBackButtonTemporarily();
+    showControls();
+    video.play().catch(() => {});
+    loadSubtitleChoices(file);
+    renderAudioTracks();
     video.focus();
   }
-
-  function closePlayer(fromHistory) {
+  function closePlayer() {
     clearTimeout(backBtnTimer);
+    clearTimeout(controlTimer);
     activeMode = "none";
-    clearTimeout(messageTimer);
-    if (video) {
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-      video.classList.remove("hidden");
-    }
-    if (driveFrame) {
-      driveFrame.src = "about:blank";
-      driveFrame.classList.add("hidden");
-    }
-    clearSubtitle();
+    clearSubtitles();
+    clearVideoSources();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
+    audioMenu.classList.add("hidden");
+    subtitleMenu.classList.add("hidden");
     const cards = grid.querySelectorAll(".video-card");
     const targetCard = cards[currentVideoIndex];
     if (targetCard) targetCard.focus();
-    if (!fromHistory && playerHistoryActive) {
-      playerHistoryActive = false;
-      history.back();
-    } else if (fromHistory) playerHistoryActive = false;
+  }
+  function fallbackMkvToMp4() {
+    if (!currentFile || !/\.mkv$/i.test(currentFile.name || "") || activeMime !== "matroska") return false;
+    console.warn("Falha no MIME Matroska; tentando video/mp4 com mediaOption.");
+    appendVideoSource(currentFile, "mp4");
+    video.play().catch(() => {});
+    return true;
   }
 
   video.addEventListener("error", () => {
     if (player.classList.contains("hidden") || activeMode !== "native") return;
-    const file = visibleVideos[currentVideoIndex];
-    if (file) switchToDrivePlayer(file);
+    if (!fallbackMkvToMp4()) {
+      status.textContent = "Falha na reprodução";
+      console.error("Erro do player HTMLMediaElement", video.error ? video.error.code : "desconhecido");
+    }
   });
-
-  if (closeBtn) closeBtn.addEventListener("click", () => closePlayer(false));
-
-  window.addEventListener("popstate", () => {
-    if (playerHistoryActive) closePlayer(true);
+  video.addEventListener("loadedmetadata", () => {
+    durationNode.textContent = formatTime(video.duration);
+    seek.max = Number.isFinite(video.duration) ? String(Math.floor(video.duration)) : "0";
+    renderAudioTracks();
   });
+  video.addEventListener("timeupdate", () => {
+    currentTimeNode.textContent = formatTime(video.currentTime);
+    if (!seek.matches(":active")) seek.value = String(Math.floor(video.currentTime || 0));
+    updateSubtitleOverlay();
+  });
+  video.addEventListener("play", () => { playBtn.textContent = "Ⅱ Pausar"; showControls(); });
+  video.addEventListener("pause", () => { playBtn.textContent = "▶ Reproduzir"; setControlsVisible(true); });
+  video.addEventListener("durationchange", () => {
+    durationNode.textContent = formatTime(video.duration);
+    seek.max = Number.isFinite(video.duration) ? String(Math.floor(video.duration)) : "0";
+  });
+  if (video.audioTracks) {
+    video.audioTracks.addEventListener("addtrack", renderAudioTracks);
+    video.audioTracks.addEventListener("removetrack", renderAudioTracks);
+    video.audioTracks.addEventListener("change", renderAudioTracks);
+  }
 
-  // Controles do controle remoto da TV quando o player nativo está aberto
+  playBtn.addEventListener("click", () => {
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+    showControls();
+  });
+  seek.addEventListener("input", () => {
+    if (Number.isFinite(video.duration)) video.currentTime = Number(seek.value);
+  });
+  audioButton.addEventListener("click", () => toggleMenu(audioMenu));
+  subtitleButton.addEventListener("click", () => toggleMenu(subtitleMenu));
+  subtitleSelect.addEventListener("change", () => {
+    setSubtitleSelection(subtitleSelect.value);
+    subtitleMenu.classList.add("hidden");
+    subtitleButton.focus();
+  });
+  document.getElementById("subtitle-sync-minus").addEventListener("click", () => {
+    subtitleOffset -= 0.5;
+    subtitleSyncValue.textContent = (subtitleOffset > 0 ? "+" : "") + subtitleOffset.toFixed(1).replace(".", ",") + "s";
+    updateSubtitleOverlay();
+  });
+  document.getElementById("subtitle-sync-plus").addEventListener("click", () => {
+    subtitleOffset += 0.5;
+    subtitleSyncValue.textContent = (subtitleOffset > 0 ? "+" : "") + subtitleOffset.toFixed(1).replace(".", ",") + "s";
+    updateSubtitleOverlay();
+  });
+  subtitleSize.addEventListener("change", () => {
+    subtitleFontSize = subtitleSize.value;
+    updateSubtitleOverlay();
+  });
+  volumeRange.addEventListener("input", () => { video.volume = Number(volumeRange.value) / 100; });
+  volumeButton.addEventListener("click", () => {
+    video.muted = !video.muted;
+    volumeButton.textContent = video.muted ? "Som desligado" : "Som";
+  });
+  closeBtn.addEventListener("click", closePlayer);
   window.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
     showBackButtonTemporarily();
-
-    // Botão Voltar da LG webOS (keyCode 461)
-    if (event.keyCode === 461) {
+    if (event.keyCode === 461 || event.key === "Escape" || event.key === "Back") {
       event.preventDefault();
-      closePlayer(false);
+      closePlayer();
       return;
     }
-
-
-    if (activeMode !== "native") return;
-    const isButtonFocused = document.activeElement && document.activeElement.tagName === "BUTTON";
-
-    if (event.key === "MediaPlayPause" || event.keyCode === 415 || event.keyCode === 19 ||
-        ((event.key === "Enter" || event.key === " ") && !isButtonFocused)) {
+    if (event.key === "MediaPlayPause" || event.keyCode === 415 || event.keyCode === 19) {
       event.preventDefault();
-      if (video.paused) video.play().catch(() => {});
-      else video.pause();
-    } else if (event.key === "ArrowLeft" || event.key === "MediaRewind" || event.keyCode === 412) {
-      if (!isButtonFocused || event.keyCode === 412) {
-        event.preventDefault();
-        if (Number.isFinite(video.currentTime)) {
-          video.currentTime = Math.max(0, video.currentTime - 15);
-          setPlaybackMessage("⏪ -15s");
-        }
-      }
-    } else if (event.key === "ArrowRight" || event.key === "MediaFastForward" || event.keyCode === 417) {
-      if (!isButtonFocused || event.keyCode === 417) {
-        event.preventDefault();
-        if (Number.isFinite(video.currentTime)) {
-          const maxTime = Number.isFinite(video.duration) ? video.duration : video.currentTime + 15;
-          video.currentTime = Math.min(maxTime, video.currentTime + 15);
-          setPlaybackMessage("⏩ +15s");
-        }
-      }
+      if (video.paused) video.play().catch(() => {}); else video.pause();
+      return;
+    }
+    const target = document.activeElement;
+    const onControl = target && (target.tagName === "BUTTON" || target.tagName === "SELECT" || target.tagName === "INPUT");
+    if (!onControl && (event.key === "ArrowLeft" || event.keyCode === 412)) {
+      event.preventDefault();
+      video.currentTime = Math.max(0, video.currentTime - 10);
+      showControls();
+    } else if (!onControl && (event.key === "ArrowRight" || event.keyCode === 417)) {
+      event.preventDefault();
+      video.currentTime = Math.min(video.duration || video.currentTime + 10, video.currentTime + 10);
+      showControls();
+    } else if (event.key === "Enter" && target === video) {
+      event.preventDefault();
+      if (video.paused) video.play().catch(() => {}); else video.pause();
     }
   });
-
-  player.addEventListener("mousemove", showBackButtonTemporarily);
+  player.addEventListener("mousemove", showControls);
+  player.addEventListener("click", showControls);
   document.getElementById("refresh").addEventListener("click", loadLibrary);
-
   loadLibrary();
 })();
