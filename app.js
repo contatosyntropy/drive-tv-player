@@ -41,7 +41,6 @@
   let subtitleLoadToken = 0;
   let backBtnTimer = null;
   let controlTimer = null;
-  let controlsVisible = true;
   let audioTracksAvailable = false;
 
   const formatSize = bytes => {
@@ -88,17 +87,6 @@
     video.appendChild(source);
     activeMime = mime;
     video.load();
-  }
-  function setControlsVisible(visible) {
-    controlsVisible = visible;
-    player.classList.toggle("controls-hidden", !visible);
-    if (visible) {
-      clearTimeout(controlTimer);
-      controlTimer = setTimeout(() => {
-        if (!video.paused && activeMode === "native" && !audioMenu.classList.contains("hidden") === false &&
-            !subtitleMenu.classList.contains("hidden") === false) setControlsVisible(false);
-      }, 5000);
-    }
   }
   function showControls() {
     setControlsVisible(true);
@@ -174,7 +162,7 @@
       items = files.filter(file => (file.mimeType && file.mimeType.startsWith("video/")) || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
       const episodeCode = name => {
-        const match = name.match(/S({1,2})*E({1,3})/i);
+        const match = name.match(/S(\\d{1,2})E(\\d{1,3})/i);
         return match ? { season: Number(match[1]), episode: Number(match[2]) } : null;
       };
       items.sort((a, b) => {
@@ -495,7 +483,7 @@
     updateSubtitleOverlay();
   });
   video.addEventListener("play", () => { playBtn.textContent = "Ⅱ Pausar"; showControls(); });
-  video.addEventListener("pause", () => { playBtn.textContent = "▶ Reproduzir"; setControlsVisible(true); });
+  video.addEventListener("pause", () => { playBtn.textContent = "▶ Reproduzir"; player.classList.remove("controls-hidden"); clearTimeout(controlTimer); });
   video.addEventListener("durationchange", () => {
     durationNode.textContent = formatTime(video.duration);
     seek.max = Number.isFinite(video.duration) ? String(Math.floor(video.duration)) : "0";
