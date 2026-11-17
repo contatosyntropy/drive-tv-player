@@ -69,7 +69,7 @@ async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
     }
 
     if (mode === "video") {
-      const mimeOverride = url.searchParams.get("mime");
+      const mimeOverride = new URL(request.url).searchParams.get("mime");
       const extension = (fileName.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
       const mimeTypes = {
         mkv: "video/webm",
