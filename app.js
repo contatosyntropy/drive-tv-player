@@ -24,7 +24,6 @@
   const volumeRange = document.getElementById("volume-range");
   const supported = /(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
   const subtitlePattern = /\.(srt|vtt)$/i;
-  const folderMime = "application/vnd.google-apps.folder";
 
   let items = [];
   let subtitleFiles = [];
