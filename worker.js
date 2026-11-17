@@ -20,79 +20,7 @@ function jsonError(message, status = 502, details = {}) {
   });
 }
 
-function getCookieHeader(response) {
-  const raw = response.headers.get("Set-Cookie") || "";
-  const matches = raw.match(/download_warning[^=;,\s]*=[^;,\s]+/gi) || [];
-  return matches.join("; ");
-}
-
-function decodeHtml(value) {
-  return value.replace(/&amp;/g, "&").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-    .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-}
-
-function getHtmlAttribute(tag, attribute) {
-  const escaped = attribute.replace(/[.*+?^{}()|[\]\\]/g, "\\$&");
-  const match = tag.match(new RegExp("(?:^|\\s)" + escaped + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))", "i"));
-  return match ? decodeHtml(match[1] ?? match[2] ?? match[3] ?? "") : "";
-}
-
-function parseDownloadForm(html, fileId, baseUrl) {
-  // O Drive pode responder com um formulário contendo parâmetros ocultos
-  // (confirm, uuid, at etc.). Preserve todos eles na URL final.
-  const formMatch = html.match(/<form\b[^>]*>[\s\S]*?<\/form>/i);
-  if (formMatch) {
-    const formTag = formMatch[0].slice(0, formMatch[0].indexOf(">") + 1);
-    const action = getHtmlAttribute(formTag, "action") || baseUrl;
-    const target = new URL(action, baseUrl);
-    const params = new URLSearchParams(target.search);
-    const inputPattern = /<input\b[^>]*>/gi;
-    let input;
-    while ((input = inputPattern.exec(formMatch[0]))) {
-      const name = getHtmlAttribute(input[0], "name");
-      const value = getHtmlAttribute(input[0], "value");
-      if (name) params.set(name, value);
-    }
-    if (!params.has("id")) params.set("id", fileId);
-    if (!params.has("export")) params.set("export", "download");
-    target.search = params.toString();
-    return target.toString();
-  }
-
-  // Algumas versões apresentam um link em vez de um formulário.
-  const anchorPattern = /<a\b[^>]*>/gi;
-  let anchor;
-  while ((anchor = anchorPattern.exec(html))) {
-    const href = getHtmlAttribute(anchor[0], "href");
-    if (!href) continue;
-    const candidate = new URL(href, baseUrl);
-    if (candidate.hostname.endsWith("google.com") &&
-        (candidate.searchParams.has("confirm") || candidate.hostname === "drive.usercontent.google.com")) {
-      if (!candidate.searchParams.has("id")) candidate.searchParams.set("id", fileId);
-      if (!candidate.searchParams.has("export")) candidate.searchParams.set("export", "download");
-      return candidate.toString();
-    }
-  }
-
-  // Tokens também podem aparecer em links/scripts ou inputs fora do form.
-  const tokenMatch =
-    html.match(/[?&]confirm=([^&"'\s]+)/i) ||
-    html.match(/name=["']confirm["'][^>]*value=["']([^"']+)["']/i) ||
-    html.match(/["']confirm["']\s*:\s*["']([^"']+)["']/i);
-  const token = tokenMatch?.[1] ? decodeHtml(tokenMatch[1]) : "";
-
-  if (token || /download|virus|large file|arquivo muito grande/i.test(html)) {
-    const target = new URL("https://drive.usercontent.google.com/download");
-    target.searchParams.set("id", fileId);
-    target.searchParams.set("export", "download");
-    target.searchParams.set("confirm", token || "t");
-    return target.toString();
-  }
-  return null;
-}
-
-async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
+async function fetchDriveMedia(request, fileId, apiKey) {
   const headers = new Headers();
   for (const name of ["Range", "If-Range"]) {
     const value = request.headers.get(name);
@@ -100,8 +28,6 @@ async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
   }
   headers.set("Accept-Encoding", "identity");
 
-  // Conteúdo binário pelo endpoint oficial da Drive API. O Worker repassa
-  // Range ao Google e transmite o corpo sem armazenar o vídeo em memória.
   const driveUrl = new URL(
     "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId)
   );
@@ -109,8 +35,6 @@ async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
   driveUrl.searchParams.set("key", apiKey);
   driveUrl.searchParams.set("supportsAllDrives", "true");
 
-  // O elemento <video> pode consultar HEAD antes de iniciar o streaming.
-  // Um GET mínimo permite obter o tamanho total via Content-Range.
   if (request.method === "HEAD") headers.set("Range", "bytes=0-0");
 
   return fetch(driveUrl.toString(), {
@@ -119,9 +43,10 @@ async function fetchDriveMedia(request, url, fileId, apiKey, mode, fileName) {
     headers
   });
 }
-async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "") {
+
+async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
   try {
-    const upstream = await fetchDriveMedia(request, url, fileId, apiKey, mode, fileName);
+    const upstream = await fetchDriveMedia(request, fileId, apiKey);
     const contentType = upstream.headers.get("Content-Type") || "";
     if (!upstream.ok && contentType.includes("application/json")) {
       const data = await upstream.json().catch(() => ({}));
@@ -142,16 +67,27 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+
     if (mode === "video") {
       const extension = (fileName.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
+      // O Chromium do webOS rejeita video/x-matroska antes de passar ao hardware GStreamer da TV.
+      // Servir como video/mp4 libera o stream para o decodificador nativo inspecionar o container real.
       const mimeTypes = {
-        mkv: "video/x-matroska", mp4: "video/mp4", m4v: "video/mp4",
-        webm: "video/webm", mov: "video/quicktime", avi: "video/x-msvideo",
-        mpg: "video/mpeg", mpeg: "video/mpeg", ts: "video/mp2t"
+        mkv: "video/mp4",
+        mp4: "video/mp4",
+        m4v: "video/mp4",
+        mov: "video/mp4",
+        webm: "video/webm",
+        avi: "video/x-msvideo",
+        mpg: "video/mpeg",
+        mpeg: "video/mpeg",
+        ts: "video/mp2t"
       };
       if (mimeTypes[extension]) responseHeaders.set("Content-Type", mimeTypes[extension]);
+      responseHeaders.set("Accept-Ranges", "bytes");
       responseHeaders.set("Content-Disposition", "inline");
     }
+
     responseHeaders.set("Cache-Control", "no-store, no-transform");
     responseHeaders.set("X-Content-Type-Options", "nosniff");
 
@@ -173,6 +109,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
     return jsonError("Falha de comunicação com o Google Drive: " + error.message, 502);
   }
 }
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -212,7 +149,6 @@ export default {
         const reportUrl = new URL("/api/probe-log/" + id, url.origin);
         const storedReport = report + "\nREPORT_ID=" + id;
 
-        // Durable Objects provide strongly consistent read-after-write storage.
         if (env.PROBE_LOG_STORE) {
           const storeId = env.PROBE_LOG_STORE.idFromName("global");
           const store = env.PROBE_LOG_STORE.get(storeId);
@@ -222,7 +158,6 @@ export default {
           });
           if (!saved.ok) throw new Error("Durable Object storage returned HTTP " + saved.status);
         } else if (env.PROBE_LOGS) {
-          // Compatibility fallback only; KV propagation can delay /latest.
           await env.PROBE_LOGS.put("report:" + id, storedReport, { expirationTtl: 86400 });
           await env.PROBE_LOGS.put("latest", id, { expirationTtl: 86400 });
         } else {
@@ -247,20 +182,28 @@ export default {
         const storeId = env.PROBE_LOG_STORE.idFromName("global");
         const store = env.PROBE_LOG_STORE.get(storeId);
         const result = await store.fetch("https://probe-log-store/latest");
-        return new Response(result.body, { status: result.status, headers: {
-          "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff"
-        }});
+        return new Response(result.body, {
+          status: result.status,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
       }
       if (env.PROBE_LOGS) {
         const id = await env.PROBE_LOGS.get("latest");
         if (!id) return jsonError("Ainda não há diagnóstico recente.", 404);
         const report = await env.PROBE_LOGS.get("report:" + id);
         if (!report) return jsonError("Diagnóstico recente expirado ou ainda não sincronizado.", 404);
-        return new Response(report, { status: 200, headers: {
-          "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff"
-        }});
+        return new Response(report, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff"
+          }
+        });
       }
       return jsonError("Armazenamento de diagnósticos não configurado.", 503);
     }
@@ -292,8 +235,6 @@ export default {
         return jsonError("Método não permitido.", 405);
       }
 
-      // O app webOS instalado pode executar em origem local (file://).
-      // O proxy entrega apenas arquivos já compartilhados no Google Drive.
       if (request.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
       }
@@ -339,7 +280,6 @@ export default {
 
       return proxyDriveFile(
         request,
-        url,
         match[1],
         apiKey,
         videoMatch ? "video" : "subtitle",
@@ -351,9 +291,6 @@ export default {
   }
 };
 
-
-// Single strongly-consistent store for playback diagnostics. All report writes
-// and the "latest" pointer are serialized by one Durable Object instance.
 export class ProbeLogStore {
   constructor(ctx, env) {
     this.ctx = ctx;
