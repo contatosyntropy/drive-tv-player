@@ -9,15 +9,16 @@ async function getDriveAccessToken(env) {
   const clientSecret = String(env?.GOOGLE_CLIENT_SECRET || "").trim();
   const refreshToken = String(env?.GOOGLE_REFRESH_TOKEN || "").trim();
 
+  if (!clientId || !clientSecret || !refreshToken) {
+    const error = new Error("Credenciais OAuth do Google Drive incompletas no Worker.");
+    error.googleError = "missing_oauth_credentials";
+    error.googleErrorDescription = "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REFRESH_TOKEN são obrigatórios.";
+    throw error;
+  }
+
   if (cachedDriveToken && Date.now() < cachedDriveTokenExpiresAt - 60000) return cachedDriveToken;
   if (driveTokenPromise) return driveTokenPromise;
   driveTokenPromise = (async () => {
-    if (!clientId || !clientSecret || !refreshToken) {
-      const error = new Error("Credenciais OAuth do Google Drive incompletas no Worker.");
-      error.googleError = "missing_oauth_credentials";
-      error.googleErrorDescription = "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REFRESH_TOKEN são obrigatórios.";
-      throw error;
-    }
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
