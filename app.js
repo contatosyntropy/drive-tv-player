@@ -4,13 +4,8 @@
   const message = document.getElementById("message");
   const status = document.getElementById("status");
   const player = document.getElementById("player");
-  const playerOverlay = document.getElementById("player-overlay");
   const video = document.getElementById("video");
-  const preview = document.getElementById("drive-preview");
   const nowPlaying = document.getElementById("now-playing");
-  const toggleSubtitleBtn = document.getElementById("toggle-subtitle");
-  const nextEpisodeBtn = document.getElementById("next-episode");
-  const fallbackDriveBtn = document.getElementById("fallback-drive");
   const playbackMessage = document.getElementById("playback-message");
 
   const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
@@ -22,12 +17,12 @@
   let currentFolderId = config.folderId;
   let visibleVideos = [];
   let currentVideoIndex = -1;
-  let usingDriveFallback = false;
   let subtitleUrl = null;
   let subtitleLoadToken = 0;
   let playerHistoryActive = false;
-  let overlayTimer = null;
+  let backBtnTimer = null;
   let messageTimer = null;
+  let retriedMatroskaMime = false;
 
   const formatSize = bytes => {
     if (!bytes) return "";
@@ -58,16 +53,14 @@
     }
   }
 
-  function showOverlayTemporarily() {
-    if (!playerOverlay) return;
-    playerOverlay.classList.remove("autohide");
-    clearTimeout(overlayTimer);
-    if (!usingDriveFallback && !video.paused) {
-      overlayTimer = setTimeout(() => {
-        if (!player.classList.contains("hidden") && !video.paused && !usingDriveFallback) {
-          playerOverlay.classList.add("autohide");
-        }
-      }, 4000);
+  function showBackButtonTemporarily() {
+    if (!closeBtn) return;
+    closeBtn.classList.remove("autohide");
+    clearTimeout(backBtnTimer);
+    if (!video.paused) {
+      backBtnTimer = setTimeout(() => {
+        if (!player.classList.contains("hidden") && !video.paused) closeBtn.classList.add("autohide");
+      }, 3500);
     }
   }
 
@@ -76,10 +69,12 @@
     return base + path;
   }
 
-  function videoSourceUrl(file) {
+  function videoSourceUrl(file, forceMatroskaMime = false) {
     const path = "/api/video/" + encodeURIComponent(file.id) + "/" +
       encodeURIComponent(file.name || "video.mp4");
-    return apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
+    let url = apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
+    if (forceMatroskaMime) url += "&mime=matroska";
+    return url;
   }
 
   const folderMime = "application/vnd.google-apps.folder";
@@ -231,7 +226,7 @@
     }
     if (subtitleUrl) URL.revokeObjectURL(subtitleUrl);
     subtitleUrl = null;
-    if (toggleSubtitleBtn) toggleSubtitleBtn.classList.add("hidden");
+    
   }
 
   function findSubtitle(videoFile) {
@@ -303,10 +298,7 @@
       track.default = true;
       video.appendChild(track);
       track.track.mode = "showing";
-      if (toggleSubtitleBtn) {
-        toggleSubtitleBtn.textContent = "Legenda: ON";
-        toggleSubtitleBtn.classList.remove("hidden");
-      }
+      
     } catch (error) {
       if (requestToken !== subtitleLoadToken) return;
       console.error("Falha ao carregar legenda:", subtitle.name, error);
@@ -326,56 +318,26 @@
     return mediaError.message ? base + " (" + mediaError.message + ")" : base;
   }
 
-  function switchToDriveFallback(file) {
-    if (!file || !preview) return;
-    usingDriveFallback = true;
-    clearTimeout(overlayTimer);
-    if (playerOverlay) playerOverlay.classList.remove("autohide");
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-    video.classList.add("hidden");
-    preview.classList.remove("hidden");
-    preview.src = "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
-    if (fallbackDriveBtn) fallbackDriveBtn.textContent = "Player da TV";
-    setPlaybackMessage("Usando Player do Drive (fallback).");
-  }
-
-  async function playInTvPlayer(index) {
+  async function playInTvPlayer(index, forceMatroskaMime = false) {
     const file = visibleVideos[index];
     if (!file) return;
-
     currentVideoIndex = index;
-    usingDriveFallback = false;
-    if (nowPlaying) nowPlaying.textContent = file.name.replace(/\.[^.]+$/, "");
-    if (fallbackDriveBtn) fallbackDriveBtn.textContent = "Player do Drive";
-    if (nextEpisodeBtn) {
-      nextEpisodeBtn.classList.toggle("hidden", index + 1 >= visibleVideos.length);
-    }
-
-    preview.src = "about:blank";
-    preview.classList.add("hidden");
-    video.classList.remove("hidden");
     video.pause();
     video.removeAttribute("src");
     video.load();
-
-    setPlaybackMessage("Carregando vídeo no player da TV…", true);
-    showOverlayTemporarily();
-
+    setPlaybackMessage("Carregando vídeo…", true);
     await loadSubtitle(file);
-    video.src = videoSourceUrl(file);
+    video.src = videoSourceUrl(file, forceMatroskaMime);
     video.load();
-
     try {
       await video.play();
       setPlaybackMessage("");
-      showOverlayTemporarily();
+      showBackButtonTemporarily();
     } catch (error) {
       if (error && error.name === "NotAllowedError") {
         setPlaybackMessage("Pressione Play / OK no controle da TV para iniciar.", true);
       } else if (!video.error) {
-        setPlaybackMessage("Não foi possível iniciar automaticamente: " + (error.message || error));
+        setPlaybackMessage("Não foi possível iniciar: " + (error.message || error), true);
       }
     }
   }
@@ -389,26 +351,21 @@
       history.pushState({ drivePlayer: true }, "", "#player");
       playerHistoryActive = true;
     }
+    currentVideoIndex = index;
+    retriedMatroskaMime = false;
     await playInTvPlayer(index);
-    document.getElementById("close-player")?.focus();
+    video.focus();
   }
 
   function closePlayer(fromHistory = false) {
-    clearTimeout(overlayTimer);
+    clearTimeout(backBtnTimer);
     clearTimeout(messageTimer);
-    usingDriveFallback = false;
     setPlaybackMessage("");
 
-    if (preview) {
-      preview.src = "about:blank";
-      preview.removeAttribute("src");
-      preview.classList.add("hidden");
-    }
     if (video) {
       video.pause();
       video.removeAttribute("src");
       video.load();
-      video.classList.add("hidden");
     }
     clearSubtitle();
     player.classList.add("hidden");
@@ -428,51 +385,21 @@
 
   video.addEventListener("playing", () => {
     setPlaybackMessage("");
-    showOverlayTemporarily();
+    showBackButtonTemporarily();
   });
+  video.addEventListener("pause", showBackButtonTemporarily);
 
-  video.addEventListener("pause", () => {
-    showOverlayTemporarily();
-  });
-
-  video.addEventListener("waiting", () => {
-    if (!usingDriveFallback) {
-      setPlaybackMessage("Carregando buffer do Google Drive…", true);
-    }
-  });
-
+  video.addEventListener("waiting", () => setPlaybackMessage("Carregando buffer…", true));
   video.addEventListener("error", () => {
-    if (usingDriveFallback || player.classList.contains("hidden")) return;
-    const detail = formatMediaError(video.error);
-    console.error("Erro no player da TV:", video.error);
-    setPlaybackMessage(detail + " Se persistir, selecione 'Player do Drive' acima.", true);
-    if (playerOverlay) playerOverlay.classList.remove("autohide");
-    fallbackDriveBtn?.focus();
-  });
-
-  toggleSubtitleBtn?.addEventListener("click", () => {
-    const track = video.textTracks && video.textTracks[0];
-    if (!track) return;
-    const nextShowing = track.mode !== "showing";
-    track.mode = nextShowing ? "showing" : "disabled";
-    toggleSubtitleBtn.textContent = nextShowing ? "Legenda: ON" : "Legenda: OFF";
-    showOverlayTemporarily();
-  });
-
-  nextEpisodeBtn?.addEventListener("click", () => {
-    if (currentVideoIndex + 1 < visibleVideos.length) {
-      playInTvPlayer(currentVideoIndex + 1);
-    }
-  });
-
-  fallbackDriveBtn?.addEventListener("click", () => {
+    if (player.classList.contains("hidden")) return;
     const file = visibleVideos[currentVideoIndex];
-    if (!file) return;
-    if (usingDriveFallback) {
-      playInTvPlayer(currentVideoIndex);
-    } else {
-      switchToDriveFallback(file);
+    if (file && /\\.mkv$/i.test(file.name || "") && !retriedMatroskaMime) {
+      retriedMatroskaMime = true;
+      playInTvPlayer(currentVideoIndex, true);
+      return;
     }
+    setPlaybackMessage(formatMediaError(video.error), true);
+    showBackButtonTemporarily();
   });
 
   document.getElementById("close-player")?.addEventListener("click", () => closePlayer());
@@ -484,7 +411,7 @@
   // Controles do controle remoto da TV quando o player nativo está aberto
   window.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
-    showOverlayTemporarily();
+    showBackButtonTemporarily();
 
     // Botão Voltar da LG webOS (keyCode 461)
     if (event.keyCode === 461) {
@@ -493,7 +420,7 @@
       return;
     }
 
-    if (usingDriveFallback) return;
+    if (false) return;
 
     const isButtonFocused = document.activeElement && document.activeElement.tagName === "BUTTON";
 
@@ -522,7 +449,7 @@
     }
   });
 
-  player.addEventListener("mousemove", showOverlayTemporarily);
+  player.addEventListener("mousemove", showBackButtonTemporarily);
   document.getElementById("refresh").addEventListener("click", loadLibrary);
 
   loadLibrary();
