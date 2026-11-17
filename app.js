@@ -5,11 +5,12 @@
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
+  const driveFrame = document.getElementById("drive-frame");
   const closeBtn = document.getElementById("close-player");
   const playbackMessage = document.getElementById("playback-message");
 
-  const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
-  const subtitlePattern = /\.(srt|vtt)$/i;
+  const supported = /(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
+  const subtitlePattern = /(srt|vtt)$/i;
 
   let items = [];
   let subtitleFiles = [];
@@ -17,7 +18,7 @@
   let currentFolderId = config.folderId;
   let visibleVideos = [];
   let currentVideoIndex = -1;
-  let isCurrentMkv = false;
+  let activeMode = "none";
   let subtitleUrl = null;
   let subtitleLoadToken = 0;
   let playerHistoryActive = false;
@@ -57,15 +58,13 @@
     if (!closeBtn) return;
     closeBtn.classList.remove("autohide");
     clearTimeout(backBtnTimer);
-    if (!video.paused) {
-      backBtnTimer = setTimeout(() => {
-        if (!player.classList.contains("hidden") && !video.paused) closeBtn.classList.add("autohide");
-      }, 3500);
-    }
+    backBtnTimer = setTimeout(() => {
+      if (!player.classList.contains("hidden")) closeBtn.classList.add("autohide");
+    }, 3500);
   }
 
   function apiUrl(path) {
-    const base = (config.apiBaseUrl || "").replace(/\/$/, "");
+    const base = (config.apiBaseUrl || "").replace(/$/, "");
     return base + path;
   }
 
@@ -75,6 +74,10 @@
     let url = apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
     if (forceMatroskaMime) url += "&mime=matroska";
     return url;
+  }
+
+  function drivePreviewUrl(file) {
+    return "https://drive.google.com/file/d/" + encodeURIComponent(file.id) + "/preview";
   }
 
   const folderMime = "application/vnd.google-apps.folder";
@@ -94,7 +97,7 @@
       const response = await fetch(url);
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error?.message || "Erro HTTP " + response.status);
+        throw new Error(data.error && data.error.message || "Erro HTTP " + response.status);
       }
       const data = await response.json();
       for (const file of (data.files || [])) {
@@ -125,10 +128,10 @@
     try {
       folders = [];
       const files = await listFolder(config.folderId, "", new Set());
-      items = files.filter(file => file.mimeType?.startsWith("video/") || supported.test(file.name || ""));
+      items = files.filter(file => (file.mimeType && file.mimeType.startsWith("video/")) || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
       const episodeCode = name => {
-        const match = name.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
+        const match = name.match(/S({1,2})*E({1,3})/i);
         return match ? { season: Number(match[1]), episode: Number(match[2]) } : null;
       };
       items.sort((a, b) => {
@@ -230,14 +233,14 @@
   }
 
   function findSubtitle(videoFile) {
-    const videoBase = videoFile.name.replace(/\.[^.]+$/, "").trim().toLocaleLowerCase();
+    const videoBase = videoFile.name.replace(/[^.]+$/, "").trim().toLocaleLowerCase();
     const sameFolder = subtitleFiles.find(file =>
       (file.folderPath || "") === (videoFile.folderPath || "") &&
-      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+      file.name.replace(/(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
     );
     if (sameFolder) return sameFolder;
     const matches = subtitleFiles.filter(file =>
-      file.name.replace(/\.(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
+      file.name.replace(/(srt|vtt)$/i, "").trim().toLocaleLowerCase() === videoBase
     );
     return matches.length === 1 ? matches[0] : null;
   }
@@ -280,13 +283,13 @@
       const buffer = await response.arrayBuffer();
       if (requestToken !== subtitleLoadToken) return;
       if (!buffer.byteLength) throw new Error("O arquivo de legenda está vazio.");
-      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^\uFEFF/, "");
-      if (/\.srt$/i.test(subtitle.name)) {
-        content = "WEBVTT\n\n" + content
-          .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")
-          .replace(/^\s*\d+\s*$/gm, "");
+      let content = decodeSubtitle(buffer, response.headers.get("content-type")).replace(/^FEFF/, "");
+      if (/srt$/i.test(subtitle.name)) {
+        content = "WEBVTT" + content
+          .replace(/({2}:{2}:{2}),({3})/g, "$1.$2")
+          .replace(/^*+*$/gm, "");
       } else if (!content.trimStart().startsWith("WEBVTT")) {
-        content = "WEBVTT\n\n" + content;
+        content = "WEBVTT" + content;
       }
       if (requestToken !== subtitleLoadToken) return;
       subtitleUrl = URL.createObjectURL(new Blob([content], { type: "text/vtt;charset=utf-8" }));
@@ -306,113 +309,86 @@
     }
   }
 
-  function formatMediaError(mediaError) {
-    if (!mediaError) return "Erro desconhecido ao reproduzir na TV.";
-    const reasons = {
-      1: "Reprodução interrompida.",
-      2: "Erro de rede ao ler o vídeo do Google Drive.",
-      3: "A TV não conseguiu decodificar o vídeo/áudio (codec incompatível).",
-      4: "Formato de vídeo não suportado pelo player da TV."
-    };
-    const base = reasons[mediaError.code] || ("Erro de mídia (código " + mediaError.code + ").");
-    return mediaError.message ? base + " (" + mediaError.message + ")" : base;
+  function switchToDrivePlayer(file) {
+    if (!file) return;
+    activeMode = "drive";
+    clearSubtitle();
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.classList.add("hidden");
+    driveFrame.classList.remove("hidden");
+    driveFrame.src = drivePreviewUrl(file);
+    showBackButtonTemporarily();
+    driveFrame.focus();
   }
 
   async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
     currentVideoIndex = index;
-    isCurrentMkv = (file.name || "").toLowerCase().endsWith(".mkv");
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
     if (!playerHistoryActive) {
       history.pushState({ drivePlayer: true }, "", "#player");
       playerHistoryActive = true;
     }
-    if (window.stopTvTranscode) window.stopTvTranscode();
     video.pause();
     video.removeAttribute("src");
     video.load();
-    setPlaybackMessage("Carregando vídeo…", true);
-    showBackButtonTemporarily();
-    await loadSubtitle(file);
-
-    if (isCurrentMkv) {
-      if (typeof window.playMkvOnTv !== "function") {
-        setPlaybackMessage("O módulo de conversão MKV não foi carregado.", true);
-        return;
-      }
-      try {
-        await window.playMkvOnTv(file, videoSourceUrl(file));
-        showBackButtonTemporarily();
-        video.focus();
-      } catch (error) {
-        console.error("Falha ao preparar MKV:", error);
-        setPlaybackMessage(error.message || String(error), true);
-        showBackButtonTemporarily();
-      }
+    video.classList.add("hidden");
+    driveFrame.src = "about:blank";
+    driveFrame.classList.add("hidden");
+    clearSubtitle();
+    if (/mkv$/i.test(file.name || "")) {
+      switchToDrivePlayer(file);
       return;
     }
-
+    activeMode = "native";
+    video.classList.remove("hidden");
+    showBackButtonTemporarily();
+    await loadSubtitle(file);
     video.src = videoSourceUrl(file);
     video.load();
-    try {
-      await video.play();
-      setPlaybackMessage("");
-      showBackButtonTemporarily();
-    } catch (error) {
-      if (error && error.name === "NotAllowedError") {
-        setPlaybackMessage("Pressione Play / OK no controle da TV para iniciar.", true);
-      } else if (!video.error) {
-        setPlaybackMessage("Não foi possível iniciar: " + (error.message || error), true);
-      }
+    try { await video.play(); } catch (error) {
+      if (error && error.name === "NotAllowedError") { /* aguarda Play pelo controle */ }
     }
     video.focus();
   }
 
-  function closePlayer(fromHistory = false) {
+  function closePlayer(fromHistory) {
     clearTimeout(backBtnTimer);
-    isCurrentMkv = false;
-    if (window.stopTvTranscode) window.stopTvTranscode();
+    activeMode = "none";
     clearTimeout(messageTimer);
-    setPlaybackMessage("");
-
     if (video) {
       video.pause();
       video.removeAttribute("src");
       video.load();
+      video.classList.remove("hidden");
+    }
+    if (driveFrame) {
+      driveFrame.src = "about:blank";
+      driveFrame.classList.add("hidden");
     }
     clearSubtitle();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
-
     const cards = grid.querySelectorAll(".video-card");
     const targetCard = cards[currentVideoIndex];
     if (targetCard) targetCard.focus();
-
     if (!fromHistory && playerHistoryActive) {
       playerHistoryActive = false;
       history.back();
-    } else if (fromHistory) {
-      playerHistoryActive = false;
-    }
+    } else if (fromHistory) playerHistoryActive = false;
   }
 
-  video.addEventListener("playing", () => {
-    setPlaybackMessage("");
-    showBackButtonTemporarily();
-  });
-  video.addEventListener("pause", showBackButtonTemporarily);
-
-  video.addEventListener("waiting", () => setPlaybackMessage("Carregando buffer…", true));
   video.addEventListener("error", () => {
-    if (player.classList.contains("hidden") || isCurrentMkv) return;
-    console.error("Erro no player da TV:", video.error);
-    setPlaybackMessage(formatMediaError(video.error), true);
-    showBackButtonTemporarily();
+    if (player.classList.contains("hidden") || activeMode !== "native") return;
+    const file = visibleVideos[currentVideoIndex];
+    if (file) switchToDrivePlayer(file);
   });
 
-  document.getElementById("close-player")?.addEventListener("click", () => closePlayer());
+  if (closeBtn) closeBtn.addEventListener("click", () => closePlayer(false));
 
   window.addEventListener("popstate", () => {
     if (playerHistoryActive) closePlayer(true);
@@ -426,11 +402,12 @@
     // Botão Voltar da LG webOS (keyCode 461)
     if (event.keyCode === 461) {
       event.preventDefault();
-      closePlayer();
+      closePlayer(false);
       return;
     }
 
 
+    if (activeMode !== "native") return;
     const isButtonFocused = document.activeElement && document.activeElement.tagName === "BUTTON";
 
     if (event.key === "MediaPlayPause" || event.keyCode === 415 || event.keyCode === 19 ||
