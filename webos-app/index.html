@@ -6,10 +6,6 @@
   <meta name="theme-color" content="#08090d">
   <title>Drive TV Player</title>
   <link rel="stylesheet" href="./styles.css">
-  <style>
-    .tv-video { display:block; width:min(96vw, 1600px); max-height:82vh; margin:2vh auto; background:#000; }
-    .tv-video.hidden, .drive-preview.hidden { display:none; }
-  </style>
 </head>
 <body>
   <header class="topbar">
@@ -26,20 +22,26 @@
     <div id="message" class="message">Carregando vídeos…</div>
     <section id="videos" class="video-grid" aria-label="Vídeos"></section>
   </main>
-  <section id="player" class="player hidden" aria-label="Reprodução do Google Drive">
-    <button id="close-player" class="close-player" type="button">← Voltar à biblioteca</button>
-    <video id="video" class="tv-video hidden" controls playsinline></video>
-    <iframe id="drive-preview" class="drive-preview" title="Reprodução do Google Drive" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+  <section id="player" class="player hidden" aria-label="Player da TV">
+    <div id="player-overlay" class="player-overlay">
+      <button id="close-player" class="player-control-button" type="button">← Voltar</button>
+      <span id="now-playing" class="now-playing"></span>
+      <div class="player-actions">
+        <button id="toggle-subtitle" class="player-control-button hidden" type="button">Legenda: ON</button>
+        <button id="next-episode" class="player-control-button next-episode-button hidden" type="button">Próximo →</button>
+        <button id="fallback-drive" class="player-control-button" type="button">Player do Drive</button>
+      </div>
+    </div>
+    <p id="playback-message" class="playback-message hidden" role="status"></p>
+    <video id="video" class="tv-video" controls playsinline preload="metadata" crossorigin="anonymous"></video>
+    <iframe id="drive-preview" class="drive-preview hidden" title="Reprodução do Google Drive" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
   </section>
-  <script src="./webOSTV.js"></script>
+  <script src="./webOSTV.js" onerror="void 0"></script>
   <script src="./config.js"></script>
   <script>
     window.APP_CONFIG = window.APP_CONFIG || {};
     window.APP_CONFIG.apiBaseUrl = "https://drive-tv-player.contatosyntropy.workers.dev";
   </script>
-  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
-  <script src="./tv-transcoder.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
