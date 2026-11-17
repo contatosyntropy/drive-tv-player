@@ -1,117 +1,248 @@
 (() => {
-  "use strict";
   const config = window.APP_CONFIG || {};
   const grid = document.getElementById("videos");
   const message = document.getElementById("message");
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
-  const closeBtn = document.getElementById("close-player");
-  const titleNode = document.getElementById("player-title");
-  const playBtn = document.getElementById("play-pause");
-  const seek = document.getElementById("seek");
-  const currentTimeNode = document.getElementById("current-time");
-  const durationNode = document.getElementById("duration");
-  const audioButton = document.getElementById("audio-button");
-  const audioMenu = document.getElementById("audio-menu");
-  const subtitleButton = document.getElementById("subtitle-button");
-  const subtitleMenu = document.getElementById("subtitle-menu");
-  const subtitleSelect = document.getElementById("subtitle-select");
+  const playerHud = document.getElementById("player-hud");
+  const playerTitle = document.getElementById("player-title");
+  const playerBadge = document.getElementById("player-badge");
+  const playbackMessage = document.getElementById("playback-message");
   const subtitleOverlay = document.getElementById("subtitle-overlay");
-  const subtitleSyncValue = document.getElementById("subtitle-sync-value");
-  const subtitleSize = document.getElementById("subtitle-size");
-  const volumeButton = document.getElementById("volume-button");
-  const volumeRange = document.getElementById("volume-range");
-  const supported = /(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
-  const subtitlePattern = /\.(srt|vtt)$/i;
+  const closeBtn = document.getElementById("close-player");
+  const seekBar = document.getElementById("seek-bar");
+  const seekBuffered = document.getElementById("seek-buffered");
+  const seekProgress = document.getElementById("seek-progress");
+  const seekThumb = document.getElementById("seek-thumb");
+  const btnRewind = document.getElementById("btn-rewind");
+  const btnPlayPause = document.getElementById("btn-play-pause");
+  const btnForward = document.getElementById("btn-forward");
+  const timeDisplay = document.getElementById("time-display");
+  const btnAudio = document.getElementById("btn-audio");
+  const btnSubtitles = document.getElementById("btn-subtitles");
+  const audioMenu = document.getElementById("audio-menu");
+  const audioList = document.getElementById("audio-list");
+  const subtitleMenu = document.getElementById("subtitle-menu");
+  const subtitleList = document.getElementById("subtitle-list");
+  const subSizeSmall = document.getElementById("sub-size-small");
+  const subSizeMedium = document.getElementById("sub-size-medium");
+  const subSizeLarge = document.getElementById("sub-size-large");
+  const subSyncMinus = document.getElementById("sub-sync-minus");
+  const subSyncValue = document.getElementById("sub-sync-value");
+  const subSyncPlus = document.getElementById("sub-sync-plus");
 
+  const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv|avi|ts)$/i;
+  const subtitlePattern = /\.(srt|vtt)$/i;
   let items = [];
   let subtitleFiles = [];
   let folders = [];
   let currentFolderId = config.folderId;
   let visibleVideos = [];
   let currentVideoIndex = -1;
-  let currentFile = null;
-  let activeMode = "none";
-  let activeMime = "";
-  let subtitleCues = [];
-  let subtitleOffset = 0;
-  let subtitleFontSize = "medium";
+  let retriedAlternativeMime = false;
+  let playerHistoryActive = false;
+  let hudTimer = null;
+  let toastTimer = null;
+  let subtitleRenderRaf = null;
+  let mkvAudioHints = [];
+  let availableSubtitles = [];
+  let activeSubtitleId = "off";
+  let parsedCues = [];
+  let subtitleOffsetSec = 0;
   let subtitleLoadToken = 0;
-  let backBtnTimer = null;
-  let controlTimer = null;
-  let audioTracksAvailable = false;
+  let lastRenderedCueText = "";
 
-  const formatSize = bytes => {
+  function isWebOS() {
+    return Boolean(window.webOS || window.PalmSystem || /Web0S|webOS|NetCast|SmartTV/i.test(navigator.userAgent || ""));
+  }
+
+  function formatSize(bytes) {
     if (!bytes) return "";
     const units = ["B", "KB", "MB", "GB"];
-    let n = Number(bytes), i = 0;
+    let n = Number(bytes);
+    let i = 0;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return n.toFixed(i ? 1 : 0) + " " + units[i];
-  };
-
-  function setMessage(text) { message.textContent = text; }
-  function apiUrl(path) { return (config.apiBaseUrl || "").replace(/\/$/, "") + path; }
-  function videoSourceUrl(file, mime) {
-    const path = "/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name || "video.mp4");
-    let url = apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
-    if (mime === "matroska") url += "&mime=matroska";
-    if (mime === "mp4") url += "&mime=mp4";
-    return url;
   }
+
   function formatTime(seconds) {
     if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
     const total = Math.floor(seconds);
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
     const s = total % 60;
-    return (h ? String(h).padStart(2, "0") + ":" : "") +
-      String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+    const pad = v => (v < 10 ? "0" + v : String(v));
+    return h > 0 ? h + ":" + pad(m) + ":" + pad(s) : pad(m) + ":" + pad(s);
   }
-  function mediaOptionType(mime) {
-    const options = {};
-    return mime + ";mediaOption=" + encodeURI(JSON.stringify(options));
+
+  function setMessage(text) { message.textContent = text; }
+
+  function showToast(text, persistent) {
+    clearTimeout(toastTimer);
+    if (!text) {
+      playbackMessage.textContent = "";
+      playbackMessage.classList.add("hidden");
+      return;
+    }
+    playbackMessage.textContent = text;
+    playbackMessage.classList.remove("hidden");
+    if (!persistent) toastTimer = setTimeout(() => playbackMessage.classList.add("hidden"), 2800);
   }
-  function clearVideoSources() {
-    video.pause();
-    while (video.firstChild) video.removeChild(video.firstChild);
-    video.removeAttribute("src");
-    video.load();
+
+  function apiUrl(path) {
+    const base = (config.apiBaseUrl || "").replace(/\/$/, "");
+    return base + path;
   }
-  function appendVideoSource(file, mime) {
-    clearVideoSources();
-    const source = document.createElement("source");
-    source.src = videoSourceUrl(file, mime);
-    source.type = mediaOptionType(mime === "matroska" ? "video/x-matroska" : mime === "mp4" ? "video/mp4" : mime);
-    video.appendChild(source);
-    activeMime = mime;
-    video.load();
+
+  function videoSourceUrl(file) {
+    const path = "/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name || "video.mp4");
+    return apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
   }
-  function showControls() {
-    player.classList.remove("controls-hidden");
-    clearTimeout(controlTimer);
-    if (!video.paused) {
-      controlTimer = setTimeout(() => {
-        if (activeMode === "native" && audioMenu.classList.contains("hidden") && subtitleMenu.classList.contains("hidden") &&
-            !isInteractiveFocus()) player.classList.add("controls-hidden");
-      }, 5000);
+
+  async function probeMkvAudioHints(file) {
+    if (!/\.mkv$/i.test(file.name || "")) return [];
+    try {
+      const response = await fetch(videoSourceUrl(file), {
+        method: "GET",
+        headers: { Range: "bytes=0-131071" },
+        cache: "no-store"
+      });
+      if (!response.ok && response.status !== 206) return [];
+      const buf = new Uint8Array(await response.arrayBuffer());
+      let pos = 0;
+      const readVintId = offset => {
+        if (offset >= buf.length) return null;
+        const b0 = buf[offset];
+        let width = 0;
+        for (let i = 0; i < 4; i++) {
+          if (b0 & (0x80 >> i)) { width = i + 1; break; }
+        }
+        if (!width || offset + width > buf.length) return null;
+        let id = 0;
+        for (let i = 0; i < width; i++) id = id * 256 + buf[offset + i];
+        return { id, width };
+      };
+      const readVintSize = offset => {
+        if (offset >= buf.length) return null;
+        const b0 = buf[offset];
+        let width = 0;
+        for (let i = 0; i < 8; i++) {
+          if (b0 & (0x80 >> i)) { width = i + 1; break; }
+        }
+        if (!width || offset + width > buf.length) return null;
+        const mask = 0xff >>> width;
+        let val = b0 & mask;
+        let allOnes = val === mask;
+        for (let i = 1; i < width; i++) {
+          const b = buf[offset + i];
+          val = val * 256 + b;
+          if (b !== 0xff) allOnes = false;
+        }
+        return { size: allOnes ? null : val, width };
+      };
+      const decodeUtf8 = (start, len) => {
+        try { return new TextDecoder("utf-8").decode(buf.subarray(start, start + len)).replace(/\0+$/, ""); }
+        catch (_) { return ""; }
+      };
+      const audioTracks = [];
+      let inTracks = false;
+      let tracksEnd = buf.length;
+      let inEntry = false;
+      let entryEnd = 0;
+      let current = null;
+      while (pos + 2 < buf.length) {
+        if (inEntry && pos >= entryEnd) {
+          if (current && current.type === 2) audioTracks.push(current);
+          inEntry = false;
+          current = null;
+        }
+        if (inTracks && pos >= tracksEnd) break;
+        const idInfo = readVintId(pos);
+        if (!idInfo) break;
+        const sizeInfo = readVintSize(pos + idInfo.width);
+        if (!sizeInfo) break;
+        const headerLen = idInfo.width + sizeInfo.width;
+        const dataStart = pos + headerLen;
+        const size = sizeInfo.size;
+        if (idInfo.id === 0x18538067) { pos = dataStart; continue; }
+        if (idInfo.id === 0x1654ae6b) {
+          inTracks = true;
+          tracksEnd = size !== null ? Math.min(buf.length, dataStart + size) : buf.length;
+          pos = dataStart;
+          continue;
+        }
+        if (idInfo.id === 0xae && inTracks) {
+          inEntry = true;
+          entryEnd = size !== null ? Math.min(tracksEnd, dataStart + size) : tracksEnd;
+          current = { type: 0, name: "", lang: "", codec: "" };
+          pos = dataStart;
+          continue;
+        }
+        if (idInfo.id === 0x1f43b675) break;
+        if (size === null || dataStart + size > buf.length) break;
+        if (inEntry && current) {
+          if (idInfo.id === 0x83) {
+            let v = 0;
+            for (let i = 0; i < size; i++) v = v * 256 + buf[dataStart + i];
+            current.type = v;
+          } else if (idInfo.id === 0x536e) {
+            current.name = decodeUtf8(dataStart, size);
+          } else if (idInfo.id === 0x22b59c || idInfo.id === 0x22b59d) {
+            const langVal = decodeUtf8(dataStart, size);
+            if (langVal && langVal !== "und") current.lang = langVal;
+          } else if (idInfo.id === 0x86) {
+            current.codec = decodeUtf8(dataStart, size).replace(/^A_/, "");
+          }
+        }
+        pos = dataStart + size;
+      }
+      if (inEntry && current && current.type === 2) audioTracks.push(current);
+      return audioTracks;
+    } catch (_) { return []; }
+  }
+
+  function friendlyLangName(code) {
+    if (!code) return "";
+    const map = {
+      por: "Português", pt: "Português", "pt-br": "Português (Brasil)", "pt-pt": "Português (Portugal)",
+      eng: "Inglês", en: "Inglês", "en-us": "Inglês (EUA)", spa: "Espanhol", es: "Espanhol",
+      jpn: "Japonês", ja: "Japonês", fre: "Francês", fra: "Francês", fr: "Francês",
+      ger: "Alemão", deu: "Alemão", de: "Alemão", ita: "Italiano", it: "Italiano", kor: "Coreano", ko: "Coreano"
+    };
+    const key = String(code).trim().toLowerCase();
+    return map[key] || String(code).toUpperCase();
+  }
+
+  function isAnyMenuOpen() {
+    return !audioMenu.classList.contains("hidden") || !subtitleMenu.classList.contains("hidden");
+  }
+  function isHudVisible() { return !playerHud.classList.contains("hud-hidden"); }
+  function showHud() {
+    playerHud.classList.remove("hud-hidden");
+    player.classList.add("hud-visible");
+    clearTimeout(hudTimer);
+    if (!video.paused && !isAnyMenuOpen()) {
+      hudTimer = setTimeout(() => {
+        if (!player.classList.contains("hidden") && !video.paused && !isAnyMenuOpen()) hideHud();
+      }, 4200);
     }
   }
-  function isInteractiveFocus() {
-    const el = document.activeElement;
-    return !!el && (el === audioMenu || audioMenu.contains(el) || el === subtitleMenu || subtitleMenu.contains(el) ||
-      el === closeBtn || el === playBtn || el === seek || el === audioButton || el === subtitleButton);
+  function hideHud() {
+    if (isAnyMenuOpen()) return;
+    playerHud.classList.add("hud-hidden");
+    player.classList.remove("hud-visible");
   }
-  function showBackButtonTemporarily() {
-    closeBtn.classList.remove("autohide");
-    clearTimeout(backBtnTimer);
-    backBtnTimer = setTimeout(() => {
-      if (!player.classList.contains("hidden")) closeBtn.classList.add("autohide");
-    }, 3500);
+  function closeMenus(restoreFocusBtn) {
+    audioMenu.classList.add("hidden");
+    subtitleMenu.classList.add("hidden");
+    btnAudio.setAttribute("aria-expanded", "false");
+    btnSubtitles.setAttribute("aria-expanded", "false");
+    if (restoreFocusBtn) restoreFocusBtn.focus();
+    showHud();
   }
 
   const folderMime = "application/vnd.google-apps.folder";
-
   async function listFolder(folderId, folderPath, visited) {
     if (visited.has(folderId)) return [];
     visited.add(folderId);
@@ -127,14 +258,14 @@
       const response = await fetch(url);
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error && data.error.message || "Erro HTTP " + response.status);
+        throw new Error((data.error && data.error.message) || "Erro HTTP " + response.status);
       }
       const data = await response.json();
       for (const file of (data.files || [])) {
         if (file.mimeType === folderMime) {
-          const folder = { id: file.id, name: file.name, parentId: folderId, folderPath };
+          const folder = { id: file.id, name: file.name, parentId: folderId, folderPath: folderPath };
           folders.push(folder);
-          collected.push(...await listFolder(file.id, folderPath ? folderPath + " / " + file.name : file.name, visited));
+          collected.push.apply(collected, await listFolder(file.id, folderPath ? folderPath + " / " + file.name : file.name, visited));
         } else {
           file.folderPath = folderPath;
           file.parentFolderId = folderId;
@@ -161,11 +292,12 @@
       items = files.filter(file => (file.mimeType && file.mimeType.startsWith("video/")) || supported.test(file.name || ""));
       subtitleFiles = files.filter(file => subtitlePattern.test(file.name || ""));
       const episodeCode = name => {
-        const match = name.match(/S(\d{1,2})E(\d{1,3})/i);
+        const match = name.match(/\bS(\d{1,2})\s*E(\d{1,3})\b/i);
         return match ? { season: Number(match[1]), episode: Number(match[2]) } : null;
       };
       items.sort((a, b) => {
-        const ea = episodeCode(a.name), eb = episodeCode(b.name);
+        const ea = episodeCode(a.name);
+        const eb = episodeCode(b.name);
         if (ea && eb) return ea.season - eb.season || ea.episode - eb.episode ||
           a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" });
         if (ea) return -1;
@@ -179,7 +311,7 @@
     } catch (error) {
       console.error(error);
       status.textContent = "Falha ao carregar";
-      setMessage("Não foi possível acessar a pasta: " + error.message + ". Verifique a chave da API, as permissões e se os vídeos estão compartilhados para acesso.");
+      setMessage("Não foi possível acessar a pasta: " + error.message);
     }
   }
 
@@ -218,10 +350,7 @@
     renderBreadcrumbs();
     const currentFolders = folders.filter(folder => folder.parentId === currentFolderId);
     visibleVideos = items.filter(file => file.parentFolderId === currentFolderId);
-    if (!currentFolders.length && !visibleVideos.length) {
-      setMessage("Esta pasta está vazia.");
-      return;
-    }
+    if (!currentFolders.length && !visibleVideos.length) { setMessage("Esta pasta está vazia."); return; }
     setMessage("");
     currentFolders.forEach(folder => {
       const card = document.createElement("button");
@@ -252,313 +381,518 @@
     });
   }
 
-
-  function subtitleStem(name) {
-    return name.replace(/\.(srt|vtt)$/i, "").toLocaleLowerCase();
-  }
-  function findSubtitles(file) {
-    const stem = (file.name || "").replace(/\.[^.]+$/, "").toLocaleLowerCase();
-    return subtitleFiles.filter(sub => {
-      if ((sub.parentFolderId || "") !== (file.parentFolderId || "")) return false;
-      const candidate = subtitleStem(sub.name || "");
-      return candidate === stem || candidate.indexOf(stem + ".") === 0 ||
-        candidate.indexOf(stem + "_") === 0 || candidate.indexOf(stem + "-") === 0;
-    }).sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true, sensitivity: "base" }));
-  }
-  async function decodeSubtitle(buffer) {
-    const bytes = new Uint8Array(buffer);
-    if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
-      return new TextDecoder("utf-8").decode(bytes.subarray(3));
+  function renderAudioMenu() {
+    audioList.innerHTML = "";
+    const tracks = video.audioTracks;
+    const count = tracks ? tracks.length : 0;
+    if (!count) {
+      const empty = document.createElement("div");
+      empty.className = "popover-item";
+      empty.textContent = mkvAudioHints.length
+        ? "Faixa padrão em reprodução (" + mkvAudioHints.length + " detectada(s))"
+        : "Áudio padrão (faixa única)";
+      audioList.appendChild(empty);
+      return;
     }
-    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder("utf-16le").decode(bytes.subarray(2));
-    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+    for (let i = 0; i < count; i++) {
+      const track = tracks[i];
+      const hint = mkvAudioHints[i] || {};
+      const langLabel = friendlyLangName(track.language || hint.lang);
+      const customName = track.label || hint.name || "";
+      const primaryText = customName && langLabel && customName.toLowerCase() !== langLabel.toLowerCase()
+        ? langLabel + " — " + customName : (customName || langLabel || ("Faixa de Áudio " + (i + 1)));
+      const subParts = ["Faixa " + (i + 1)];
+      if (hint.codec) subParts.push(hint.codec);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "popover-item" + (track.enabled ? " active" : "");
+      btn.innerHTML = '<span><span></span><span class="popover-item-sub"></span></span><span class="popover-check">' + (track.enabled ? "✓" : "") + "</span>";
+      btn.querySelector("span > span").textContent = primaryText;
+      btn.querySelector(".popover-item-sub").textContent = subParts.join(" • ");
+      btn.addEventListener("click", () => {
+        for (let j = 0; j < tracks.length; j++) tracks[j].enabled = (j === i);
+        renderAudioMenu();
+        showToast("Áudio: " + primaryText);
+        closeMenus(btnAudio);
+      });
+      audioList.appendChild(btn);
+    }
+  }
+
+  function clearSubtitles() {
+    subtitleLoadToken++;
+    parsedCues = [];
+    lastRenderedCueText = "";
+    subtitleOverlay.innerHTML = "";
+    subtitleOverlay.classList.add("hidden");
+  }
+
+  function findFolderSubtitles(videoFile) {
+    const videoBase = videoFile.name.replace(/\.[^.]+$/, "").trim().toLowerCase();
+    const epMatch = videoBase.match(/\bs\d{1,2}\s*e\d{1,3}\b/i);
+    const epTag = epMatch ? epMatch[0].replace(/\s+/g, "").toLowerCase() : "";
+    const inSameFolder = subtitleFiles.filter(f => (f.folderPath || "") === (videoFile.folderPath || ""));
+    const exactMatches = [];
+    const episodeMatches = [];
+    const otherFolderSubs = [];
+    inSameFolder.forEach(sub => {
+      const subBase = sub.name.replace(/\.(srt|vtt)$/i, "").trim().toLowerCase();
+      if (subBase === videoBase || subBase.startsWith(videoBase + ".")) exactMatches.push(sub);
+      else if (epTag && subBase.replace(/\s+/g, "").includes(epTag)) episodeMatches.push(sub);
+      else otherFolderSubs.push(sub);
+    });
+    return exactMatches.concat(episodeMatches, otherFolderSubs).map(sub => {
+      const rawNoExt = sub.name.replace(/\.(srt|vtt)$/i, "");
+      const videoNoExt = videoFile.name.replace(/\.[^.]+$/, "");
+      let label = rawNoExt;
+      if (rawNoExt.toLowerCase().startsWith(videoNoExt.toLowerCase() + ".")) {
+        const suffix = rawNoExt.slice(videoNoExt.length + 1);
+        label = friendlyLangName(suffix) + " (" + suffix + ")";
+      } else if (rawNoExt.toLowerCase() === videoNoExt.toLowerCase()) label = "Português / Padrão";
+      return { file: sub, label: label };
+    });
+  }
+
+  function decodeSubtitleBuffer(buffer, contentType) {
+    const bytes = new Uint8Array(buffer);
+    if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF)
+      return new TextDecoder("utf-8").decode(bytes.subarray(3));
+    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE)
+      return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF)
+      return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+    const declared = (contentType || "").match(/charset=([^;]+)/i);
+    if (declared) {
+      try { return new TextDecoder(declared[1].replace(/["']/g, "").trim()).decode(bytes); } catch (_) {}
+    }
     try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
     catch (_) { return new TextDecoder("windows-1252").decode(bytes); }
   }
-  function timeToSeconds(value) {
-    const m = value.trim().replace(",", ".").match(/^(\d{1,2}):(\d{2}):(\d{2})\.(\d{1,3})$/);
-    if (!m) return NaN;
-    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(("0." + m[4]));
+
+  function parseTimestampToSeconds(ts) {
+    const clean = ts.trim().replace(",", ".");
+    const parts = clean.split(":");
+    if (parts.length === 3) return Number(parts[0]) * 3600 + Number(parts[1]) * 60 + Number(parts[2]);
+    if (parts.length === 2) return Number(parts[0]) * 60 + Number(parts[1]);
+    return NaN;
   }
-  function parseSubtitle(text, isSrt) {
-    let normalized = text.replace(/^\uFEFF/, "").replace(/\r/g, "");
-    if (isSrt) normalized = normalized.replace(/(\d{1,2}:\d{2}:\d{2}),(\d{1,3})/g, "$1.$2");
-    const blocks = normalized.split(/\n\s*\n/);
+
+  function parseSrtOrVtt(rawText) {
+    const text = rawText.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const blocks = text.split(/\n{2,}/);
     const cues = [];
-    blocks.forEach(block => {
-      const lines = block.split("\n");
-      const timeIndex = lines.findIndex(line => line.indexOf("-->") >= 0);
-      if (timeIndex < 0) return;
-      const times = lines[timeIndex].split("-->");
-      const start = timeToSeconds(times[0]);
-      const end = timeToSeconds((times[1] || "").trim().split(/\s+/)[0]);
-      const body = lines.slice(timeIndex + 1).join("\n").trim();
-      if (Number.isFinite(start) && Number.isFinite(end) && end > start && body) {
-        cues.push({ start: start, end: end, text: body.replace(/<[^>]*>/g, "") });
+    for (let i = 0; i < blocks.length; i++) {
+      const lines = blocks[i].trim().split("\n");
+      if (!lines.length || lines[0].startsWith("WEBVTT") || lines[0].startsWith("NOTE")) continue;
+      let timeLineIdx = 0;
+      if (lines.length >= 2 && lines[1].indexOf("-->") !== -1) timeLineIdx = 1;
+      else if (lines[0].indexOf("-->") === -1) continue;
+      const timeParts = lines[timeLineIdx].split("-->");
+      if (timeParts.length < 2) continue;
+      const start = parseTimestampToSeconds(timeParts[0]);
+      const end = parseTimestampToSeconds(timeParts[1].trim().split(/\s+/)[0]);
+      const bodyLines = lines.slice(timeLineIdx + 1).join("\n").trim();
+      if (Number.isFinite(start) && Number.isFinite(end) && bodyLines) {
+        const cleaned = bodyLines.replace(/\{\\[^}]+\}/g, "").replace(/<[^>]+>/g, "").trim();
+        if (cleaned) cues.push({ start: start, end: end, text: cleaned });
       }
-    });
+    }
     return cues;
   }
-  function clearSubtitles() {
-    subtitleLoadToken++;
-    subtitleCues = [];
-    subtitleOverlay.textContent = "";
-    subtitleSelect.innerHTML = '<option value="">Desativadas</option>';
-    subtitleSyncValue.textContent = "0,0s";
-  }
-  async function loadSubtitleOption(file, token) {
-    const url = apiUrl("/api/subtitle/" + encodeURIComponent(file.id)) + "?key=" + encodeURIComponent(config.apiKey);
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) throw new Error("HTTP " + response.status);
-    const buffer = await response.arrayBuffer();
-    if (token !== subtitleLoadToken) return [];
-    const text = await decodeSubtitle(buffer);
-    return parseSubtitle(text, /\.srt$/i.test(file.name || ""));
-  }
-  async function loadSubtitleChoices(file) {
+
+  async function selectSubtitle(subEntry, silent) {
     clearSubtitles();
-    const token = subtitleLoadToken;
-    const matches = findSubtitles(file);
-    if (!matches.length) {
-      subtitleButton.disabled = true;
-      subtitleButton.textContent = "Legendas —";
+    if (!subEntry) {
+      activeSubtitleId = "off";
+      renderSubtitleMenu();
+      if (!silent) showToast("Legendas desativadas");
       return;
     }
-    subtitleButton.disabled = false;
-    subtitleButton.textContent = "Legendas";
-    for (let i = 0; i < matches.length; i++) {
+    const token = ++subtitleLoadToken;
+    activeSubtitleId = subEntry.file.id;
+    renderSubtitleMenu();
+    try {
+      const url = apiUrl("/api/subtitle/" + encodeURIComponent(subEntry.file.id)) + "?key=" + encodeURIComponent(config.apiKey);
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const buffer = await response.arrayBuffer();
       if (token !== subtitleLoadToken) return;
-      const option = document.createElement("option");
-      option.value = String(i);
-      option.textContent = matches[i].name.replace(/\.(srt|vtt)$/i, "");
-      option.dataset.fileId = matches[i].id;
-      subtitleSelect.appendChild(option);
-      try {
-        matches[i].parsedCues = await loadSubtitleOption(matches[i], token);
-      } catch (error) {
-        console.warn("Não foi possível carregar a legenda " + matches[i].name, error);
-        option.disabled = true;
-        option.textContent += " (indisponível)";
-      }
+      parsedCues = parseSrtOrVtt(decodeSubtitleBuffer(buffer, response.headers.get("content-type")));
+      lastRenderedCueText = "";
+      if (!silent) showToast("Legenda: " + subEntry.label);
+    } catch (error) {
+      if (token !== subtitleLoadToken) return;
+      console.error("Erro ao carregar legenda:", error);
+      activeSubtitleId = "off";
+      renderSubtitleMenu();
+      if (!silent) showToast("Falha ao carregar legenda");
     }
-    subtitleSelect._subtitleFiles = matches;
-    if (matches.length) {
-      const firstAvailable = matches.findIndex(file => file.parsedCues && file.parsedCues.length);
-      if (firstAvailable >= 0) {
-        subtitleSelect.value = String(firstAvailable);
-        subtitleCues = matches[firstAvailable].parsedCues;
+  }
+
+  function renderSubtitleOverlayNow() {
+    if (player.classList.contains("hidden") || activeSubtitleId === "off" || !parsedCues.length) {
+      if (lastRenderedCueText !== "") {
+        lastRenderedCueText = "";
+        subtitleOverlay.innerHTML = "";
+        subtitleOverlay.classList.add("hidden");
+      }
+      return;
+    }
+    const t = video.currentTime - subtitleOffsetSec;
+    const activeLines = [];
+    for (let i = 0; i < parsedCues.length; i++) {
+      const cue = parsedCues[i];
+      if (t >= cue.start && t <= cue.end) activeLines.push(cue.text);
+      else if (cue.start > t + 5 && activeLines.length > 0) break;
+    }
+    const combined = activeLines.join("\n");
+    if (combined !== lastRenderedCueText) {
+      lastRenderedCueText = combined;
+      if (!combined) {
+        subtitleOverlay.innerHTML = "";
+        subtitleOverlay.classList.add("hidden");
+      } else {
+        subtitleOverlay.innerHTML = "";
+        const box = document.createElement("span");
+        box.className = "subtitle-box";
+        box.textContent = combined;
+        subtitleOverlay.appendChild(box);
         subtitleOverlay.classList.remove("hidden");
-        updateSubtitleOverlay();
       }
     }
   }
-  function updateSubtitleOverlay() {
-    if (!subtitleCues.length || video.paused && video.readyState < 2) {
-      subtitleOverlay.textContent = "";
+
+  function startSubtitleLoop() {
+    cancelAnimationFrame(subtitleRenderRaf);
+    const tick = () => {
+      renderSubtitleOverlayNow();
+      if (!player.classList.contains("hidden")) subtitleRenderRaf = requestAnimationFrame(tick);
+    };
+    subtitleRenderRaf = requestAnimationFrame(tick);
+  }
+
+  function renderSubtitleMenu() {
+    subtitleList.innerHTML = "";
+    const offBtn = document.createElement("button");
+    offBtn.type = "button";
+    offBtn.className = "popover-item" + (activeSubtitleId === "off" ? " active" : "");
+    offBtn.innerHTML = '<span>Desativada</span><span class="popover-check">' + (activeSubtitleId === "off" ? "✓" : "") + "</span>";
+    offBtn.addEventListener("click", () => { selectSubtitle(null, false); closeMenus(btnSubtitles); });
+    subtitleList.appendChild(offBtn);
+    if (!availableSubtitles.length) {
+      const none = document.createElement("div");
+      none.className = "popover-item";
+      none.innerHTML = '<span class="popover-item-sub">Nenhum arquivo .srt ou .vtt encontrado nesta pasta.</span>';
+      subtitleList.appendChild(none);
       return;
     }
-    const now = video.currentTime + subtitleOffset;
-    const active = subtitleCues.filter(cue => now >= cue.start && now <= cue.end);
-    subtitleOverlay.textContent = active.map(cue => cue.text).join("\n");
-    subtitleOverlay.classList.toggle("hidden", active.length === 0);
-    subtitleOverlay.classList.remove("size-small", "size-medium", "size-large");
-    subtitleOverlay.classList.add("size-" + subtitleFontSize);
+    availableSubtitles.forEach(entry => {
+      const isSelected = activeSubtitleId === entry.file.id;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "popover-item" + (isSelected ? " active" : "");
+      btn.innerHTML = '<span><span></span><span class="popover-item-sub"></span></span><span class="popover-check">' + (isSelected ? "✓" : "") + "</span>";
+      btn.querySelector("span > span").textContent = entry.label;
+      btn.querySelector(".popover-item-sub").textContent = entry.file.name;
+      btn.addEventListener("click", () => { selectSubtitle(entry, false); closeMenus(btnSubtitles); });
+      subtitleList.appendChild(btn);
+    });
   }
-  function setSubtitleSelection(value) {
-    if (value === "") {
-      subtitleCues = [];
-      subtitleOverlay.textContent = "";
-      subtitleOverlay.classList.add("hidden");
-      return;
-    }
-    const files = subtitleSelect._subtitleFiles || [];
-    const selected = files[Number(value)];
-    subtitleCues = selected && selected.parsedCues ? selected.parsedCues : [];
-    updateSubtitleOverlay();
-  }
-  function renderAudioTracks() {
-    audioMenu.innerHTML = "";
-    const tracks = video.audioTracks;
-    if (!tracks || !tracks.length) {
-      audioButton.disabled = true;
-      audioButton.textContent = "Áudio —";
-      audioTracksAvailable = false;
-      return;
-    }
-    audioTracksAvailable = true;
-    audioButton.disabled = false;
-    audioButton.textContent = "Áudio";
-    for (let i = 0; i < tracks.length; i++) {
-      const track = tracks[i];
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "menu-option";
-      const label = track.label || track.language || ("Faixa " + (i + 1));
-      button.textContent = (track.enabled ? "✓ " : "") + label;
-      button.addEventListener("click", () => {
-        for (let j = 0; j < tracks.length; j++) tracks[j].enabled = j === i;
-        renderAudioTracks();
-        audioMenu.classList.add("hidden");
-        audioButton.focus();
-      });
-      audioMenu.appendChild(button);
+
+  function updateProgressUi() {
+    const duration = video.duration;
+    const current = video.currentTime || 0;
+    timeDisplay.textContent = formatTime(current) + " / " + formatTime(duration);
+    if (Number.isFinite(duration) && duration > 0) {
+      const pct = Math.max(0, Math.min(100, current / duration * 100));
+      seekProgress.style.width = pct.toFixed(2) + "%";
+      seekThumb.style.left = pct.toFixed(2) + "%";
+      seekBar.setAttribute("aria-valuenow", String(Math.round(pct)));
+      if (video.buffered && video.buffered.length > 0) {
+        const buffEnd = video.buffered.end(video.buffered.length - 1);
+        seekBuffered.style.width = Math.max(0, Math.min(100, buffEnd / duration * 100)).toFixed(2) + "%";
+      }
+    } else {
+      seekProgress.style.width = "0%";
+      seekThumb.style.left = "0%";
+      seekBuffered.style.width = "0%";
     }
   }
-  function toggleMenu(menu) {
-    const opening = menu.classList.contains("hidden");
-    audioMenu.classList.add("hidden");
-    subtitleMenu.classList.add("hidden");
-    if (opening) {
-      menu.classList.remove("hidden");
-      const first = menu.querySelector("button,select");
-      if (first) first.focus();
-      showControls();
-    }
+
+  function seekRelative(deltaSec) {
+    if (!Number.isFinite(video.currentTime)) return;
+    const maxTime = Number.isFinite(video.duration) ? video.duration : video.currentTime + Math.abs(deltaSec);
+    video.currentTime = Math.max(0, Math.min(maxTime, video.currentTime + deltaSec));
+    updateProgressUi();
+    renderSubtitleOverlayNow();
+    showToast((deltaSec < 0 ? "↺ " : "↻ +") + deltaSec + "s");
+    showHud();
   }
-  function play(index) {
+
+  function togglePlayPause() {
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+    showHud();
+  }
+
+  function resetVideoSources() {
+    video.pause();
+    video.removeAttribute("src");
+    while (video.firstChild) video.removeChild(video.firstChild);
+    video.load();
+  }
+
+  function attachVideoSource(file, forceMp4Mime) {
+    resetVideoSources();
+    const isMkv = /\.mkv$/i.test(file.name || "");
+    const baseMime = isMkv && !forceMp4Mime ? "video/x-matroska" : "video/mp4";
+    const source = document.createElement("source");
+    source.src = videoSourceUrl(file);
+    if (isWebOS()) {
+      const mediaOpt = JSON.stringify({ htmlMediaOption: { useUMSMediaInfo: true } });
+      source.type = baseMime + ";mediaOption=" + mediaOpt;
+    } else source.type = baseMime;
+    video.appendChild(source);
+    video.load();
+  }
+
+  async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
     currentVideoIndex = index;
-    currentFile = file;
+    retriedAlternativeMime = false;
+    mkvAudioHints = [];
+    subtitleOffsetSec = 0;
+    subSyncValue.textContent = "0.0s";
+    playerTitle.textContent = file.name;
+    playerBadge.textContent = formatSize(file.size) || "Reproduzindo na TV";
     player.classList.remove("hidden");
     document.getElementById("library").classList.add("hidden");
-    titleNode.textContent = file.name;
-    clearSubtitles();
-    audioMenu.classList.add("hidden");
-    subtitleMenu.classList.add("hidden");
-    clearVideoSources();
-    activeMode = "native";
-    const isMkv = /\.mkv$/i.test(file.name || "");
-    if (isMkv) appendVideoSource(file, "matroska");
-    else {
-      const ext = ((file.name || "").match(/\.([^.]+)$/) || [])[1];
-      const mimeMap = { mp4: "video/mp4", m4v: "video/mp4", mov: "video/mp4", webm: "video/webm", ogv: "video/ogg", ogg: "video/ogg" };
-      appendVideoSource(file, mimeMap[(ext || "").toLowerCase()] || "video/mp4");
+    closeMenus();
+    showHud();
+    if (!playerHistoryActive) {
+      history.pushState({ drivePlayer: true }, "", "#player");
+      playerHistoryActive = true;
     }
-    showBackButtonTemporarily();
-    showControls();
-    video.play().catch(() => {});
-    loadSubtitleChoices(file);
-    renderAudioTracks();
-    video.focus();
+    showToast("Carregando vídeo na TV…", true);
+    availableSubtitles = findFolderSubtitles(file);
+    if (availableSubtitles.length > 0) selectSubtitle(availableSubtitles[0], true);
+    else selectSubtitle(null, true);
+    attachVideoSource(file, false);
+    startSubtitleLoop();
+    probeMkvAudioHints(file).then(hints => {
+      mkvAudioHints = hints;
+      if (hints.length > 0 && hints[0].codec) {
+        playerBadge.textContent = (formatSize(file.size) ? formatSize(file.size) + " • " : "") +
+          hints[0].codec + " • " + hints.length + " faixa(s) de áudio";
+      }
+      renderAudioMenu();
+    });
+    try {
+      await video.play();
+      showToast("");
+      btnPlayPause.focus();
+      showHud();
+    } catch (error) {
+      if (error && error.name === "NotAllowedError") {
+        showToast("Pressione OK / Play no controle da TV para iniciar.", true);
+        btnPlayPause.focus();
+      }
+    }
   }
-  function closePlayer() {
-    clearTimeout(backBtnTimer);
-    clearTimeout(controlTimer);
-    activeMode = "none";
+
+  function closePlayer(fromHistory) {
+    clearTimeout(hudTimer);
+    clearTimeout(toastTimer);
+    cancelAnimationFrame(subtitleRenderRaf);
+    showToast("");
+    closeMenus();
     clearSubtitles();
-    clearVideoSources();
+    resetVideoSources();
     player.classList.add("hidden");
     document.getElementById("library").classList.remove("hidden");
-    audioMenu.classList.add("hidden");
-    subtitleMenu.classList.add("hidden");
     const cards = grid.querySelectorAll(".video-card");
     const targetCard = cards[currentVideoIndex];
     if (targetCard) targetCard.focus();
-  }
-  function fallbackMkvToMp4() {
-    if (!currentFile || !/\.mkv$/i.test(currentFile.name || "") || activeMime !== "matroska") return false;
-    console.warn("Falha no MIME Matroska; tentando video/mp4 com mediaOption.");
-    appendVideoSource(currentFile, "mp4");
-    video.play().catch(() => {});
-    return true;
+    if (!fromHistory && playerHistoryActive) {
+      playerHistoryActive = false;
+      history.back();
+    } else if (fromHistory) playerHistoryActive = false;
   }
 
-  video.addEventListener("error", () => {
-    if (player.classList.contains("hidden") || activeMode !== "native") return;
-    if (!fallbackMkvToMp4()) {
-      status.textContent = "Falha na reprodução";
-      console.error("Erro do player HTMLMediaElement", video.error ? video.error.code : "desconhecido");
+  video.addEventListener("loadedmetadata", () => {
+    updateProgressUi();
+    renderAudioMenu();
+    if (video.videoWidth && video.videoHeight) {
+      const res = video.videoWidth + "×" + video.videoHeight;
+      if (playerBadge.textContent.indexOf(res) === -1)
+        playerBadge.textContent = res + (playerBadge.textContent ? " • " + playerBadge.textContent : "");
     }
   });
-  video.addEventListener("loadedmetadata", () => {
-    durationNode.textContent = formatTime(video.duration);
-    seek.max = Number.isFinite(video.duration) ? String(Math.floor(video.duration)) : "0";
-    renderAudioTracks();
-  });
-  video.addEventListener("timeupdate", () => {
-    currentTimeNode.textContent = formatTime(video.currentTime);
-    if (!seek.matches(":active")) seek.value = String(Math.floor(video.currentTime || 0));
-    updateSubtitleOverlay();
-  });
-  video.addEventListener("play", () => { playBtn.textContent = "Ⅱ Pausar"; showControls(); });
-  video.addEventListener("pause", () => { playBtn.textContent = "▶ Reproduzir"; player.classList.remove("controls-hidden"); clearTimeout(controlTimer); });
-  video.addEventListener("durationchange", () => {
-    durationNode.textContent = formatTime(video.duration);
-    seek.max = Number.isFinite(video.duration) ? String(Math.floor(video.duration)) : "0";
-  });
-  if (video.audioTracks) {
-    video.audioTracks.addEventListener("addtrack", renderAudioTracks);
-    video.audioTracks.addEventListener("removetrack", renderAudioTracks);
-    video.audioTracks.addEventListener("change", renderAudioTracks);
+
+  if (video.audioTracks && typeof video.audioTracks.addEventListener === "function") {
+    video.audioTracks.addEventListener("addtrack", renderAudioMenu);
+    video.audioTracks.addEventListener("change", renderAudioMenu);
   }
 
-  playBtn.addEventListener("click", () => {
-    if (video.paused) video.play().catch(() => {});
-    else video.pause();
-    showControls();
+  video.addEventListener("playing", () => { btnPlayPause.textContent = "⏸ Pausar"; showToast(""); showHud(); });
+  video.addEventListener("pause", () => { btnPlayPause.textContent = "▶ Play"; showHud(); });
+  video.addEventListener("waiting", () => showToast("Carregando buffer…", true));
+  video.addEventListener("timeupdate", () => { updateProgressUi(); renderSubtitleOverlayNow(); });
+  video.addEventListener("progress", updateProgressUi);
+  video.addEventListener("ended", () => { btnPlayPause.textContent = "▶ Play"; showHud(); });
+
+  video.addEventListener("error", () => {
+    if (player.classList.contains("hidden")) return;
+    const file = visibleVideos[currentVideoIndex];
+    if (file && /\.mkv$/i.test(file.name || "") && !retriedAlternativeMime) {
+      retriedAlternativeMime = true;
+      attachVideoSource(file, true);
+      video.play().catch(() => {});
+      return;
+    }
+    const err = video.error;
+    const codeMsg = err ? " (código " + err.code + ")" : "";
+    showToast("Não foi possível reproduzir este arquivo na TV" + codeMsg + ".", true);
+    showHud();
   });
-  seek.addEventListener("input", () => {
-    if (Number.isFinite(video.duration)) video.currentTime = Number(seek.value);
+
+  closeBtn.addEventListener("click", () => closePlayer(false));
+  btnPlayPause.addEventListener("click", togglePlayPause);
+  btnRewind.addEventListener("click", () => seekRelative(-15));
+  btnForward.addEventListener("click", () => seekRelative(15));
+  seekBar.addEventListener("click", event => {
+    if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+    const rect = seekBar.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    video.currentTime = ratio * video.duration;
+    updateProgressUi();
+    renderSubtitleOverlayNow();
+    showHud();
   });
-  audioButton.addEventListener("click", () => toggleMenu(audioMenu));
-  subtitleButton.addEventListener("click", () => toggleMenu(subtitleMenu));
-  subtitleSelect.addEventListener("change", () => {
-    setSubtitleSelection(subtitleSelect.value);
-    subtitleMenu.classList.add("hidden");
-    subtitleButton.focus();
+
+  btnAudio.addEventListener("click", () => {
+    const opening = audioMenu.classList.contains("hidden");
+    closeMenus();
+    if (opening) {
+      renderAudioMenu();
+      audioMenu.classList.remove("hidden");
+      btnAudio.setAttribute("aria-expanded", "true");
+      const activeItem = audioList.querySelector(".popover-item.active") || audioList.querySelector("button");
+      if (activeItem) activeItem.focus();
+    }
   });
-  document.getElementById("subtitle-sync-minus").addEventListener("click", () => {
-    subtitleOffset -= 0.5;
-    subtitleSyncValue.textContent = (subtitleOffset > 0 ? "+" : "") + subtitleOffset.toFixed(1).replace(".", ",") + "s";
-    updateSubtitleOverlay();
+  btnSubtitles.addEventListener("click", () => {
+    const opening = subtitleMenu.classList.contains("hidden");
+    closeMenus();
+    if (opening) {
+      renderSubtitleMenu();
+      subtitleMenu.classList.remove("hidden");
+      btnSubtitles.setAttribute("aria-expanded", "true");
+      const activeItem = subtitleList.querySelector(".popover-item.active") || subtitleList.querySelector("button");
+      if (activeItem) activeItem.focus();
+    }
   });
-  document.getElementById("subtitle-sync-plus").addEventListener("click", () => {
-    subtitleOffset += 0.5;
-    subtitleSyncValue.textContent = (subtitleOffset > 0 ? "+" : "") + subtitleOffset.toFixed(1).replace(".", ",") + "s";
-    updateSubtitleOverlay();
+
+  function setSubtitleSize(sizeClass, activeBtn) {
+    subtitleOverlay.classList.remove("size-small", "size-medium", "size-large");
+    subtitleOverlay.classList.add(sizeClass);
+    [subSizeSmall, subSizeMedium, subSizeLarge].forEach(b => b.classList.remove("active"));
+    activeBtn.classList.add("active");
+    showHud();
+  }
+  subSizeSmall.addEventListener("click", () => setSubtitleSize("size-small", subSizeSmall));
+  subSizeMedium.addEventListener("click", () => setSubtitleSize("size-medium", subSizeMedium));
+  subSizeLarge.addEventListener("click", () => setSubtitleSize("size-large", subSizeLarge));
+  subSyncMinus.addEventListener("click", () => {
+    subtitleOffsetSec = Math.round((subtitleOffsetSec - 0.5) * 10) / 10;
+    subSyncValue.textContent = (subtitleOffsetSec > 0 ? "+" : "") + subtitleOffsetSec.toFixed(1) + "s";
+    renderSubtitleOverlayNow();
+    showHud();
   });
-  subtitleSize.addEventListener("change", () => {
-    subtitleFontSize = subtitleSize.value;
-    updateSubtitleOverlay();
+  subSyncPlus.addEventListener("click", () => {
+    subtitleOffsetSec = Math.round((subtitleOffsetSec + 0.5) * 10) / 10;
+    subSyncValue.textContent = (subtitleOffsetSec > 0 ? "+" : "") + subtitleOffsetSec.toFixed(1) + "s";
+    renderSubtitleOverlayNow();
+    showHud();
   });
-  volumeRange.addEventListener("input", () => { video.volume = Number(volumeRange.value) / 100; });
-  volumeButton.addEventListener("click", () => {
-    video.muted = !video.muted;
-    volumeButton.textContent = video.muted ? "Som desligado" : "Som";
-  });
-  closeBtn.addEventListener("click", closePlayer);
+
+  window.addEventListener("popstate", () => { if (playerHistoryActive) closePlayer(true); });
   window.addEventListener("keydown", event => {
     if (player.classList.contains("hidden")) return;
-    showBackButtonTemporarily();
-    showControls();
-    if (event.keyCode === 461 || event.key === "Escape" || event.key === "Back") {
+    if (event.keyCode === 461 || event.key === "Escape") {
       event.preventDefault();
-      closePlayer();
+      if (!audioMenu.classList.contains("hidden")) closeMenus(btnAudio);
+      else if (!subtitleMenu.classList.contains("hidden")) closeMenus(btnSubtitles);
+      else closePlayer(false);
       return;
     }
     if (event.key === "MediaPlayPause" || event.keyCode === 415 || event.keyCode === 19) {
-      event.preventDefault();
-      if (video.paused) video.play().catch(() => {}); else video.pause();
+      event.preventDefault(); togglePlayPause(); return;
+    }
+    if (event.key === "MediaRewind" || event.keyCode === 412) {
+      event.preventDefault(); seekRelative(-15); return;
+    }
+    if (event.key === "MediaFastForward" || event.keyCode === 417) {
+      event.preventDefault(); seekRelative(15); return;
+    }
+    if (event.key === "MediaStop" || event.keyCode === 413) {
+      event.preventDefault(); closePlayer(false); return;
+    }
+    if (isAnyMenuOpen()) {
+      const openMenu = !audioMenu.classList.contains("hidden") ? audioMenu : subtitleMenu;
+      const focusables = Array.from(openMenu.querySelectorAll("button"));
+      const idx = focusables.indexOf(document.activeElement);
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        const next = focusables[(idx + 1) % focusables.length];
+        if (next) next.focus();
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        const prev = focusables[(idx - 1 + focusables.length) % focusables.length];
+        if (prev) prev.focus();
+      }
       return;
     }
-    const target = document.activeElement;
-    const onControl = target && (target.tagName === "BUTTON" || target.tagName === "SELECT" || target.tagName === "INPUT");
-    if (!onControl && (event.key === "ArrowLeft" || event.keyCode === 412)) {
-      event.preventDefault();
-      video.currentTime = Math.max(0, video.currentTime - 10);
-      showControls();
-    } else if (!onControl && (event.key === "ArrowRight" || event.keyCode === 417)) {
-      event.preventDefault();
-      video.currentTime = Math.min(video.duration || video.currentTime + 10, video.currentTime + 10);
-      showControls();
-    } else if (event.key === "Enter" && target === video) {
-      event.preventDefault();
-      if (video.paused) video.play().catch(() => {}); else video.pause();
+    if (!isHudVisible()) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault(); togglePlayPause(); btnPlayPause.focus();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault(); seekRelative(-15);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault(); seekRelative(15);
+      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault(); showHud(); btnPlayPause.focus();
+      }
+      return;
     }
+    showHud();
+    const active = document.activeElement;
+    const bottomButtons = [btnRewind, btnPlayPause, btnForward, btnAudio, btnSubtitles];
+    if (active === seekBar) {
+      if (event.key === "ArrowLeft") { event.preventDefault(); seekRelative(-15); }
+      else if (event.key === "ArrowRight") { event.preventDefault(); seekRelative(15); }
+      else if (event.key === "ArrowDown") { event.preventDefault(); btnPlayPause.focus(); }
+      else if (event.key === "ArrowUp") { event.preventDefault(); closeBtn.focus(); }
+      else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); togglePlayPause(); }
+      return;
+    }
+    const btnIdx = bottomButtons.indexOf(active);
+    if (btnIdx !== -1) {
+      if (event.key === "ArrowRight") { event.preventDefault(); bottomButtons[(btnIdx + 1) % bottomButtons.length].focus(); }
+      else if (event.key === "ArrowLeft") { event.preventDefault(); bottomButtons[(btnIdx - 1 + bottomButtons.length) % bottomButtons.length].focus(); }
+      else if (event.key === "ArrowUp") { event.preventDefault(); seekBar.focus(); }
+      return;
+    }
+    if (active === closeBtn && event.key === "ArrowDown") { event.preventDefault(); seekBar.focus(); }
   });
-  player.addEventListener("mousemove", showControls);
-  player.addEventListener("click", showControls);
+
+  video.addEventListener("click", () => {
+    if (isAnyMenuOpen()) { closeMenus(); return; }
+    if (isHudVisible()) togglePlayPause();
+    else { showHud(); btnPlayPause.focus(); }
+  });
+  player.addEventListener("mousemove", () => { if (!isAnyMenuOpen()) showHud(); });
   document.getElementById("refresh").addEventListener("click", loadLibrary);
   loadLibrary();
 })();
