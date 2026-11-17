@@ -732,24 +732,84 @@
     });
   }
 
+  function isDriveQuotaError(status, detail) {
+    return Number(status) === 403 &&
+      /downloadQuotaExceeded|download quota exceeded|quota.{0,30}(exceeded|limit)|too many users have viewed or downloaded/i.test(String(detail || ""));
+  }
+
+  async function checkDriveQuota(file) {
+    try {
+      const response = await fetch(videoSourceUrl(file), {
+        method: "GET",
+        headers: { Range: "bytes=0-0" },
+        cache: "no-store"
+      });
+      if (response.status !== 403) {
+        if (response.body) await response.body.cancel().catch(() => {});
+        return { exceeded: false, status: response.status, detail: "" };
+      }
+      let detail = "";
+      const contentType = response.headers.get("content-type") || "";
+      if (/json|text/i.test(contentType)) {
+        try {
+          const payload = await response.clone().json();
+          detail = [
+            payload.error,
+            payload.message,
+            payload.reason,
+            payload.details && JSON.stringify(payload.details)
+          ].filter(Boolean).join(" ");
+        } catch (_) {
+          try { detail = await response.text(); } catch (_) {}
+        }
+      }
+      return { exceeded: isDriveQuotaError(response.status, detail), status: response.status, detail };
+    } catch (error) {
+      return { exceeded: false, status: 0, detail: error && error.message ? error.message : String(error) };
+    }
+  }
+
+  function showQuotaExceededMessage() {
+    clearTimeout(startupWatchdog);
+    showToast(
+      "Cota de download do Google Drive excedida para este arquivo (HTTP 403). " +
+      "Para assistir agora, abra o Google Drive, clique com o botão direito no vídeo e escolha “Fazer uma cópia”. " +
+      "Depois reproduza a cópia.",
+      true
+    );
+    showHud();
+  }
+
   function triggerNextAttempt(file, sessionToken, failedAttempt) {
     if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
     if (playbackAttempt !== failedAttempt || fallbackTransitionPending) return;
     fallbackTransitionPending = true;
     clearTimeout(fallbackTransitionTimer);
-    fallbackTransitionTimer = setTimeout(() => { fallbackTransitionPending = false; }, 1200);
-    const isMkv = /\.mkv$/i.test(file.name || "");
-    if (isWebOS() && isMkv && failedAttempt < 3) {
-      startStreamAttempt(file, failedAttempt + 1, sessionToken);
-      return;
-    }
-    if (failedAttempt < 2) {
-      startStreamAttempt(file, failedAttempt + 1, sessionToken);
-      return;
-    }
-    clearTimeout(startupWatchdog);
-    diagnosePlaybackFailure(file, sessionToken);
 
+    // Verifica a cota antes de alternar MIME ou iniciar outra tentativa.
+    checkDriveQuota(file).then(quota => {
+      if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
+      if (quota.exceeded) {
+        showQuotaExceededMessage();
+        return;
+      }
+
+      fallbackTransitionTimer = setTimeout(() => { fallbackTransitionPending = false; }, 1200);
+      const isMkv = /\\.mkv$/i.test(file.name || "");
+      if (isWebOS() && isMkv && failedAttempt < 3) {
+        startStreamAttempt(file, failedAttempt + 1, sessionToken);
+        return;
+      }
+      if (failedAttempt < 2) {
+        startStreamAttempt(file, failedAttempt + 1, sessionToken);
+        return;
+      }
+      clearTimeout(startupWatchdog);
+      diagnosePlaybackFailure(file, sessionToken);
+    }).catch(error => {
+      console.warn("[Drive TV Player] Falha ao verificar cota do Drive:", error);
+      fallbackTransitionPending = false;
+    });
   }
 
   function startStreamAttempt(file, attempt, sessionToken) {
