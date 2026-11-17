@@ -1,11 +1,12 @@
 {
   "id": "com.syntropy.drivetvplayer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "vendor": "Syntropy Digital",
   "type": "web",
   "main": "index.html",
   "title": "Drive TV Player",
   "icon": "icon.png",
   "largeIcon": "largeicon.png",
-  "appDescription": "Sua biblioteca do Google Drive na TV."
+  "appDescription": "Sua biblioteca do Google Drive na TV.",
+  "disableBackHistoryAPI": true
 }
