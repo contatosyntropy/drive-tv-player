@@ -22,10 +22,21 @@
     <div id="message" class="message">Carregando vídeos…</div>
     <section id="videos" class="video-grid" aria-label="Vídeos"></section>
   </main>
-  <section id="player" class="player hidden" aria-label="Reprodução do Google Drive">
-    <button id="close-player" class="close-player" type="button">← Voltar à biblioteca</button>
-    <iframe id="drive-preview" class="drive-preview" title="Reprodução do Google Drive" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+  <section id="player" class="player hidden" aria-label="Player da TV">
+    <div id="player-overlay" class="player-overlay">
+      <button id="close-player" class="player-control-button" type="button">← Voltar</button>
+      <span id="now-playing" class="now-playing"></span>
+      <div class="player-actions">
+        <button id="toggle-subtitle" class="player-control-button hidden" type="button">Legenda: ON</button>
+        <button id="next-episode" class="player-control-button next-episode-button hidden" type="button">Próximo →</button>
+        <button id="fallback-drive" class="player-control-button" type="button">Player do Drive</button>
+      </div>
+    </div>
+    <p id="playback-message" class="playback-message hidden" role="status"></p>
+    <video id="video" class="tv-video" controls playsinline preload="metadata" crossorigin="anonymous"></video>
+    <iframe id="drive-preview" class="drive-preview hidden" title="Reprodução do Google Drive" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
   </section>
+  <script src="./webOSTV.js" onerror="void 0"></script>
   <script src="./config.js"></script>
   <script src="./app.js"></script>
 </body>
