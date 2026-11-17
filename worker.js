@@ -35,13 +35,51 @@ async function fetchDriveMedia(request, fileId, apiKey) {
 
   if (request.method === "HEAD") headers.set("Range", "bytes=0-0");
 
-  return fetch(driveUrl.toString(), {
+  const primary = await fetch(driveUrl.toString(), {
     method: "GET",
     redirect: "follow",
     headers
   });
-}
 
+  if (primary.status !== 403) return primary;
+
+  // O endpoint usercontent usa uma rota de download alternativa. Reutilizamos
+  // exatamente os mesmos cabeçalhos, inclusive Range/If-Range.
+  const fallbackUrl = new URL("https://drive.usercontent.google.com/download");
+  fallbackUrl.searchParams.set("id", fileId);
+  fallbackUrl.searchParams.set("export", "download");
+  fallbackUrl.searchParams.set("confirm", "t");
+
+  try {
+    const secondary = await fetch(fallbackUrl.toString(), {
+      method: "GET",
+      redirect: "follow",
+      headers
+    });
+    const secondaryType = secondary.headers.get("Content-Type") || "";
+    const isDownload = secondary.ok &&
+      !/text\/html|application\/json/i.test(secondaryType);
+
+    if (isDownload) {
+      if (primary.body) await primary.body.cancel().catch(() => {});
+      return secondary;
+    }
+
+    // Se o fallback também reportar a cota, devolve sua resposta JSON para
+    // que o app possa identificar downloadQuotaExceeded sem tentar outros MIME.
+    let secondaryText = "";
+    try { secondaryText = await secondary.clone().text(); } catch (_) {}
+    if (secondary.status === 403 && /downloadQuotaExceeded|quota/i.test(secondaryText)) {
+      if (primary.body) await primary.body.cancel().catch(() => {});
+      return secondary;
+    }
+    if (secondary.body) await secondary.body.cancel().catch(() => {});
+  } catch (_) {
+    // Mantém a resposta original do Drive como diagnóstico caso o fallback falhe.
+  }
+
+  return primary;
+}
 async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "") {
   try {
     const upstream = await fetchDriveMedia(request, fileId, apiKey);
