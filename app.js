@@ -5,7 +5,7 @@
   const status = document.getElementById("status");
   const player = document.getElementById("player");
   const video = document.getElementById("video");
-  const nowPlaying = document.getElementById("now-playing");
+  const closeBtn = document.getElementById("close-player");
   const playbackMessage = document.getElementById("playback-message");
 
   const supported = /\.(mp4|m4v|webm|ogv|ogg|mov|mkv)$/i;
@@ -17,12 +17,12 @@
   let currentFolderId = config.folderId;
   let visibleVideos = [];
   let currentVideoIndex = -1;
+  let isCurrentMkv = false;
   let subtitleUrl = null;
   let subtitleLoadToken = 0;
   let playerHistoryActive = false;
   let backBtnTimer = null;
   let messageTimer = null;
-  let retriedMatroskaMime = false;
 
   const formatSize = bytes => {
     if (!bytes) return "";
@@ -318,16 +318,43 @@
     return mediaError.message ? base + " (" + mediaError.message + ")" : base;
   }
 
-  async function playInTvPlayer(index, forceMatroskaMime = false) {
+  async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
     currentVideoIndex = index;
+    isCurrentMkv = (file.name || "").toLowerCase().endsWith(".mkv");
+    player.classList.remove("hidden");
+    document.getElementById("library").classList.add("hidden");
+    if (!playerHistoryActive) {
+      history.pushState({ drivePlayer: true }, "", "#player");
+      playerHistoryActive = true;
+    }
+    if (window.stopTvTranscode) window.stopTvTranscode();
     video.pause();
     video.removeAttribute("src");
     video.load();
     setPlaybackMessage("Carregando vídeo…", true);
+    showBackButtonTemporarily();
     await loadSubtitle(file);
-    video.src = videoSourceUrl(file, forceMatroskaMime);
+
+    if (isCurrentMkv) {
+      if (typeof window.playMkvOnTv !== "function") {
+        setPlaybackMessage("O módulo de conversão MKV não foi carregado.", true);
+        return;
+      }
+      try {
+        await window.playMkvOnTv(file, videoSourceUrl(file));
+        showBackButtonTemporarily();
+        video.focus();
+      } catch (error) {
+        console.error("Falha ao preparar MKV:", error);
+        setPlaybackMessage(error.message || String(error), true);
+        showBackButtonTemporarily();
+      }
+      return;
+    }
+
+    video.src = videoSourceUrl(file);
     video.load();
     try {
       await video.play();
@@ -340,25 +367,13 @@
         setPlaybackMessage("Não foi possível iniciar: " + (error.message || error), true);
       }
     }
-  }
-
-  async function play(index) {
-    const file = visibleVideos[index];
-    if (!file) return;
-    player.classList.remove("hidden");
-    document.getElementById("library").classList.add("hidden");
-    if (!playerHistoryActive) {
-      history.pushState({ drivePlayer: true }, "", "#player");
-      playerHistoryActive = true;
-    }
-    currentVideoIndex = index;
-    retriedMatroskaMime = false;
-    await playInTvPlayer(index);
     video.focus();
   }
 
   function closePlayer(fromHistory = false) {
     clearTimeout(backBtnTimer);
+    isCurrentMkv = false;
+    if (window.stopTvTranscode) window.stopTvTranscode();
     clearTimeout(messageTimer);
     setPlaybackMessage("");
 
@@ -391,13 +406,8 @@
 
   video.addEventListener("waiting", () => setPlaybackMessage("Carregando buffer…", true));
   video.addEventListener("error", () => {
-    if (player.classList.contains("hidden")) return;
-    const file = visibleVideos[currentVideoIndex];
-    if (file && /\\.mkv$/i.test(file.name || "") && !retriedMatroskaMime) {
-      retriedMatroskaMime = true;
-      playInTvPlayer(currentVideoIndex, true);
-      return;
-    }
+    if (player.classList.contains("hidden") || isCurrentMkv) return;
+    console.error("Erro no player da TV:", video.error);
     setPlaybackMessage(formatMediaError(video.error), true);
     showBackButtonTemporarily();
   });
