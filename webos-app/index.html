@@ -12,6 +12,7 @@
     <div class="brand"><span class="brand-mark">▶</span><span>DRIVE<span class="muted">PLAYER</span></span></div>
     <div class="top-actions"><span id="status" class="status">Preparando biblioteca…</span><button id="refresh" class="icon-button" aria-label="Atualizar biblioteca">↻</button></div>
   </header>
+
   <main id="library">
     <section class="hero">
       <p class="eyebrow">SUA BIBLIOTECA</p>
@@ -22,41 +23,62 @@
     <div id="message" class="message">Carregando vídeos…</div>
     <section id="videos" class="video-grid" aria-label="Vídeos"></section>
   </main>
-  <section id="player" class="player hidden" aria-label="Player de vídeo">
-    <button id="close-player" class="close-player" type="button">← Voltar</button>
-    <div class="player-title" id="player-title"></div>
-    <video id="video" class="tv-video" playsinline preload="metadata" tabindex="0"></video>
-    <div id="subtitle-overlay" class="subtitle-overlay hidden"></div>
-    <div class="player-controls" id="player-controls">
-      <div class="seek-row">
-        <span id="current-time">00:00</span>
-        <input id="seek" class="seek" type="range" min="0" max="0" value="0" step="1" aria-label="Posição do vídeo">
-        <span id="duration">00:00</span>
-      </div>
-      <div class="control-row">
-        <button id="play-pause" class="control-button primary-control" type="button">▶ Reproduzir</button>
-        <button id="audio-button" class="control-button" type="button">Áudio —</button>
-        <button id="subtitle-button" class="control-button" type="button">Legendas —</button>
-        <button id="volume-button" class="control-button" type="button">Som</button>
-        <input id="volume-range" class="volume-range" type="range" min="0" max="100" value="100" aria-label="Volume">
-      </div>
-      <div id="audio-menu" class="player-menu hidden" aria-label="Faixas de áudio"></div>
-      <div id="subtitle-menu" class="player-menu subtitle-menu hidden" aria-label="Configurações de legenda">
-        <label for="subtitle-select">Faixa de legenda</label>
-        <select id="subtitle-select"><option value="">Desativadas</option></select>
-        <div class="subtitle-settings">
-          <span>Sincronia</span>
-          <button id="subtitle-sync-minus" class="menu-option" type="button">− 0,5s</button>
-          <span id="subtitle-sync-value">0,0s</span>
-          <button id="subtitle-sync-plus" class="menu-option" type="button">+ 0,5s</button>
+
+  <section id="player" class="player hidden" aria-label="Player da TV">
+    <video id="video" class="tv-video" playsinline preload="metadata"></video>
+    <div id="subtitle-overlay" class="subtitle-overlay size-medium hidden" aria-live="off"></div>
+    <p id="playback-message" class="playback-message hidden" role="status"></p>
+    <div id="player-hud" class="player-hud">
+      <div class="hud-top">
+        <button id="close-player" class="hud-btn hud-back" type="button">← Voltar</button>
+        <div class="hud-title-wrap">
+          <div id="player-title" class="hud-title"></div>
+          <div id="player-badge" class="hud-badge"></div>
         </div>
-        <label for="subtitle-size">Tamanho</label>
-        <select id="subtitle-size">
-          <option value="small">Pequena</option>
-          <option value="medium" selected>Média</option>
-          <option value="large">Grande</option>
-        </select>
       </div>
+      <div class="hud-bottom">
+        <div id="seek-bar" class="seek-bar" tabindex="0" role="slider" aria-label="Linha do tempo" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="seek-track">
+            <div id="seek-buffered" class="seek-buffered"></div>
+            <div id="seek-progress" class="seek-progress"></div>
+            <div id="seek-thumb" class="seek-thumb"></div>
+          </div>
+        </div>
+        <div class="hud-controls">
+          <div class="hud-group-left">
+            <button id="btn-rewind" class="hud-btn" type="button" aria-label="Voltar 15 segundos">↺ 15s</button>
+            <button id="btn-play-pause" class="hud-btn hud-btn-primary" type="button" aria-label="Reproduzir ou Pausar">⏸ Pausar</button>
+            <button id="btn-forward" class="hud-btn" type="button" aria-label="Avançar 15 segundos">15s ↻</button>
+            <span id="time-display" class="time-display">00:00 / 00:00</span>
+          </div>
+          <div class="hud-group-right">
+            <button id="btn-audio" class="hud-btn" type="button" aria-haspopup="true" aria-expanded="false">🔊 Áudio</button>
+            <button id="btn-subtitles" class="hud-btn" type="button" aria-haspopup="true" aria-expanded="false">💬 Legendas</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="audio-menu" class="popover-menu hidden" role="menu" aria-label="Faixas de áudio">
+      <div class="popover-header">Faixas de Áudio</div>
+      <div id="audio-list" class="popover-list"></div>
+    </div>
+    <div id="subtitle-menu" class="popover-menu hidden" role="menu" aria-label="Legendas">
+      <div class="popover-header">Legendas (.SRT / .VTT)</div>
+      <div class="popover-tools">
+        <div class="tool-row">
+          <span class="tool-label">Tamanho:</span>
+          <button id="sub-size-small" class="mini-btn" type="button">P</button>
+          <button id="sub-size-medium" class="mini-btn active" type="button">M</button>
+          <button id="sub-size-large" class="mini-btn" type="button">G</button>
+        </div>
+        <div class="tool-row">
+          <span class="tool-label">Sincronia:</span>
+          <button id="sub-sync-minus" class="mini-btn" type="button">-0.5s</button>
+          <span id="sub-sync-value" class="sync-value">0.0s</span>
+          <button id="sub-sync-plus" class="mini-btn" type="button">+0.5s</button>
+        </div>
+      </div>
+      <div id="subtitle-list" class="popover-list"></div>
     </div>
   </section>
   <script src="./webOSTV.js" onerror="void 0"></script>
