@@ -269,8 +269,8 @@ export default {
         }
       }
 
-      const videoMatch = url.pathname.match(/^\\/api\\/video\\/([A-Za-z0-9_-]+)(?:\\/([^/]+))?$/);
-      const subtitleMatch = url.pathname.match(/^\\/api\\/subtitle\\/([A-Za-z0-9_-]+)$/);
+      const videoMatch = url.pathname.match(/^\/api\/video\/([A-Za-z0-9_-]+)(?:\/([^/]+))?$/);
+      const subtitleMatch = url.pathname.match(/^\/api\/subtitle\/([A-Za-z0-9_-]+)$/);
       const match = videoMatch || subtitleMatch;
       if (!match) return jsonError("Rota de mídia não encontrada.", 404);
 
