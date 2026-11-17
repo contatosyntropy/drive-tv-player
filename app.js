@@ -42,6 +42,8 @@
   let currentVideoIndex = -1;
   let retriedAlternativeMime = false;
   let playbackAttempt = 0;
+  let fallbackTransitionPending = false;
+  let fallbackTransitionTimer = null;
   let playbackSessionToken = 0;
   let startupWatchdog = null;
   let probedAudioForIndex = -1;
@@ -663,7 +665,10 @@
 
   function triggerNextAttempt(file, sessionToken, failedAttempt) {
     if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
-    if (playbackAttempt !== failedAttempt) return;
+    if (playbackAttempt !== failedAttempt || fallbackTransitionPending) return;
+    fallbackTransitionPending = true;
+    clearTimeout(fallbackTransitionTimer);
+    fallbackTransitionTimer = setTimeout(() => { fallbackTransitionPending = false; }, 1200);
     const isMkv = /\.mkv$/i.test(file.name || "");
     if (isWebOS() && isMkv && failedAttempt < 3) {
       startStreamAttempt(file, failedAttempt + 1, sessionToken);
@@ -726,6 +731,8 @@
     const file = visibleVideos[index];
     if (!file) return;
     currentVideoIndex = index;
+    fallbackTransitionPending = false;
+    clearTimeout(fallbackTransitionTimer);
     retriedAlternativeMime = false;
     probedAudioForIndex = -1;
     mkvAudioHints = [];
@@ -773,6 +780,8 @@
 
   video.addEventListener("loadedmetadata", () => {
     clearTimeout(startupWatchdog);
+    fallbackTransitionPending = false;
+    clearTimeout(fallbackTransitionTimer);
     updateProgressUi();
     renderAudioMenu();
     if (video.videoWidth && video.videoHeight) {
