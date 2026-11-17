@@ -340,7 +340,7 @@
     driveFrame.src = "about:blank";
     driveFrame.classList.add("hidden");
     clearSubtitle();
-    if (/mkv$/i.test(file.name || "")) {
+    if (/\\.mkv$/i.test(file.name || "")) {
       switchToDrivePlayer(file);
       return;
     }
