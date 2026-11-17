@@ -58,7 +58,7 @@
   let lastRenderedCueText = "";
 
   function isWebOS() {
-    return Boolean(window.webOS || window.PalmSystem || /Web0S|webOS|NetCast|SmartTV/i.test(navigator.userAgent || ""));
+    return Boolean(window.webOS || window.PalmSystem || /Web0S|webOS|WebAppManager|LG Browser|NetCast|SmartTV/i.test(navigator.userAgent || ""));
   }
 
   function formatSize(bytes) {
@@ -99,9 +99,11 @@
     return base + path;
   }
 
-  function videoSourceUrl(file) {
+  function videoSourceUrl(file, mimeParam) {
     const path = "/api/video/" + encodeURIComponent(file.id) + "/" + encodeURIComponent(file.name || "video.mp4");
-    return apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
+    let url = apiUrl(path) + "?key=" + encodeURIComponent(config.apiKey);
+    if (mimeParam) url += "&mime=" + encodeURIComponent(mimeParam);
+    return url;
   }
 
   async function probeMkvAudioHints(file) {
@@ -659,43 +661,54 @@
     return encodeURIComponent(JSON.stringify(options));
   }
 
+  function triggerNextAttempt(file, sessionToken, failedAttempt) {
+    if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
+    if (playbackAttempt !== failedAttempt) return;
+    const isMkv = /\.mkv$/i.test(file.name || "");
+    if (isWebOS() && isMkv && failedAttempt < 3) {
+      startStreamAttempt(file, failedAttempt + 1, sessionToken);
+      return;
+    }
+    if (failedAttempt < 2) {
+      startStreamAttempt(file, failedAttempt + 1, sessionToken);
+      return;
+    }
+    clearTimeout(startupWatchdog);
+    const err = video.error;
+    const codeMsg = err ? " (código " + err.code + ")" : "";
+    showToast("Não foi possível reproduzir este arquivo na TV" + codeMsg + ".", true);
+    showHud();
+  }
+
   function startStreamAttempt(file, attempt, sessionToken) {
     if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
     playbackAttempt = attempt;
     resetVideoSources();
-    const streamUrl = videoSourceUrl(file);
-
-    if (attempt === 1) {
+    const isMkv = /\.mkv$/i.test(file.name || "");
+    const isWebOsMkv = isWebOS() && isMkv;
+    const sourceAttempt = isWebOS() && (attempt === 1 || (isWebOsMkv && attempt === 2));
+    if (sourceAttempt) {
       const source = document.createElement("source");
-      source.setAttribute("src", streamUrl);
-      source.setAttribute("type", "video/mp4;mediaOption=" + buildWebOSMediaOption());
-      source.addEventListener("error", () => {
-        if (sessionToken === playbackSessionToken && playbackAttempt === 1) {
-          startStreamAttempt(file, 2, sessionToken);
-        }
-      });
+      let sourceType = "video/mp4";
+      let sourceUrl = videoSourceUrl(file);
+      if (isWebOsMkv && attempt === 1) sourceType = "video/x-matroska";
+      else if (isWebOsMkv && attempt === 2) {
+        sourceType = "video/mp4";
+        sourceUrl = videoSourceUrl(file, "octet");
+      }
+      source.setAttribute("src", sourceUrl);
+      source.setAttribute("type", sourceType + ";mediaOption=" + buildWebOSMediaOption());
+      source.addEventListener("error", () => triggerNextAttempt(file, sessionToken, attempt));
       video.appendChild(source);
       video.load();
     } else {
-      video.src = streamUrl;
+      video.src = videoSourceUrl(file);
       video.load();
     }
-
     startupWatchdog = setTimeout(() => {
       if (sessionToken !== playbackSessionToken || player.classList.contains("hidden")) return;
-      if (video.readyState === 0) {
-        if (attempt === 1) {
-          startStreamAttempt(file, 2, sessionToken);
-        } else {
-          showToast(
-            "A TV ainda não recebeu o stream (networkState=" + video.networkState +
-            ", readyState=" + video.readyState + "). Verifique a conexão.",
-            true
-          );
-        }
-      }
-    }, 7000);
-
+      if (video.readyState === 0) triggerNextAttempt(file, sessionToken, attempt);
+    }, 6500);
     video.play().then(() => {
       if (sessionToken !== playbackSessionToken) return;
       if (video.readyState >= 3) showToast("");
@@ -709,7 +722,6 @@
       }
     });
   }
-
   async function play(index) {
     const file = visibleVideos[index];
     if (!file) return;
@@ -811,15 +823,7 @@
   video.addEventListener("error", () => {
     if (player.classList.contains("hidden")) return;
     const file = visibleVideos[currentVideoIndex];
-    if (file && playbackAttempt === 1) {
-      startStreamAttempt(file, 2, playbackSessionToken);
-      return;
-    }
-    clearTimeout(startupWatchdog);
-    const err = video.error;
-    const codeMsg = err ? " (código " + err.code + ")" : "";
-    showToast("Não foi possível reproduzir este arquivo na TV" + codeMsg + ".", true);
-    showHud();
+    if (file) triggerNextAttempt(file, playbackSessionToken, playbackAttempt);
   });
 
   closeBtn.addEventListener("click", () => closePlayer(false));
