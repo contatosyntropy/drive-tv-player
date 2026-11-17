@@ -125,7 +125,7 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
         responseHeaders.set("Content-Type", "video/x-matroska");
       } else if (mimeOverride === "mp4") {
         responseHeaders.set("Content-Type", "video/mp4");
-      } else if (extension && extension !== "webm" && /^video\/webm(?:;|$)/i.test(contentType)) {
+      } else if (extension !== "webm" && /^video\/webm(?:;|$)/i.test(contentType)) {
         // O Drive pode rotular MKV/outros contêineres como WebM; não propague esse MIME falso.
         responseHeaders.set("Content-Type", "video/x-matroska");
       } else if (mimeTypes[extension]) {
