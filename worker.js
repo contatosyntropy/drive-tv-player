@@ -142,6 +142,15 @@ async function proxyDriveFile(request, url, fileId, apiKey, mode, fileName = "")
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+    if (mode === "subtitle") {
+      const extension = (fileName.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
+      const subtitleTypes = {
+        srt: "application/x-subrip; charset=utf-8",
+        vtt: "text/vtt; charset=utf-8"
+      };
+      responseHeaders.set("Content-Type", subtitleTypes[extension] || "text/plain; charset=utf-8");
+      responseHeaders.set("Content-Disposition", "inline" + (fileName ? '; filename="' + fileName.replace(/["\\]/g, "") + '"' : ""));
+    }
     if (mode === "video") {
       const extension = (fileName.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
       const mimeTypes = {
@@ -326,7 +335,7 @@ export default {
       }
 
       const videoMatch = url.pathname.match(/^\/api\/video\/([A-Za-z0-9_-]+)(?:\/([^/]+))?$/);
-      const subtitleMatch = url.pathname.match(/^\/api\/subtitle\/([A-Za-z0-9_-]+)$/);
+      const subtitleMatch = url.pathname.match(/^\/api\/subtitle\/([A-Za-z0-9_-]+)(?:\/([^/]+))?$/);
       const match = videoMatch || subtitleMatch;
       if (!match) {
         return jsonError("Rota de mídia não encontrada.", 404);
@@ -343,7 +352,9 @@ export default {
         match[1],
         apiKey,
         videoMatch ? "video" : "subtitle",
-        videoMatch && videoMatch[2] ? decodeURIComponent(videoMatch[2]) : ""
+        (videoMatch && videoMatch[2]) || (subtitleMatch && subtitleMatch[2])
+          ? decodeURIComponent((videoMatch && videoMatch[2]) || (subtitleMatch && subtitleMatch[2]))
+          : ""
       );
     }
 
