@@ -1,6 +1,66 @@
 <!doctype html>
-<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#08090d"><title>Drive TV Player</title><link rel="stylesheet" href="./styles.css"></head>
-<body><header class="topbar"><div class="brand"><span class="brand-mark">▶</span><span>DRIVE<span class="muted">PLAYER</span></span></div><div class="top-actions"><span id="status" class="status">Preparando biblioteca…</span><button id="refresh" class="icon-button" aria-label="Atualizar biblioteca">↻</button></div></header>
-<main id="library"><section class="hero"><p class="eyebrow">SUA BIBLIOTECA</p><h1>Escolha o que assistir.</h1><p class="subheading">Seus vídeos do Google Drive, em um só lugar.</p></section><nav id="breadcrumbs" class="breadcrumbs" aria-label="Navegação de pastas"></nav><div id="message" class="message">Carregando vídeos…</div><section id="videos" class="video-grid" aria-label="Vídeos"></section></main>
-<section id="player" class="player hidden" aria-label="Player da TV"><button id="close-player" class="close-player" type="button">← Voltar</button><video id="video" class="tv-video" controls playsinline preload="metadata"></video><iframe id="drive-frame" class="drive-frame hidden" title="Player do Google Drive" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe></section>
-<script src="./webOSTV.js" onerror="void 0"></script><script src="./config.js"></script><script src="./app.js"></script></body></html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#08090d">
+  <title>Drive TV Player</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">▶</span><span>DRIVE<span class="muted">PLAYER</span></span></div>
+    <div class="top-actions"><span id="status" class="status">Preparando biblioteca…</span><button id="refresh" class="icon-button" aria-label="Atualizar biblioteca">↻</button></div>
+  </header>
+  <main id="library">
+    <section class="hero">
+      <p class="eyebrow">SUA BIBLIOTECA</p>
+      <h1>Escolha o que assistir.</h1>
+      <p class="subheading">Seus vídeos do Google Drive, em um só lugar.</p>
+    </section>
+    <nav id="breadcrumbs" class="breadcrumbs" aria-label="Navegação de pastas"></nav>
+    <div id="message" class="message">Carregando vídeos…</div>
+    <section id="videos" class="video-grid" aria-label="Vídeos"></section>
+  </main>
+  <section id="player" class="player hidden" aria-label="Player de vídeo">
+    <button id="close-player" class="close-player" type="button">← Voltar</button>
+    <div class="player-title" id="player-title"></div>
+    <video id="video" class="tv-video" playsinline preload="metadata" tabindex="0"></video>
+    <div id="subtitle-overlay" class="subtitle-overlay hidden"></div>
+    <div class="player-controls" id="player-controls">
+      <div class="seek-row">
+        <span id="current-time">00:00</span>
+        <input id="seek" class="seek" type="range" min="0" max="0" value="0" step="1" aria-label="Posição do vídeo">
+        <span id="duration">00:00</span>
+      </div>
+      <div class="control-row">
+        <button id="play-pause" class="control-button primary-control" type="button">▶ Reproduzir</button>
+        <button id="audio-button" class="control-button" type="button">Áudio —</button>
+        <button id="subtitle-button" class="control-button" type="button">Legendas —</button>
+        <button id="volume-button" class="control-button" type="button">Som</button>
+        <input id="volume-range" class="volume-range" type="range" min="0" max="100" value="100" aria-label="Volume">
+      </div>
+      <div id="audio-menu" class="player-menu hidden" aria-label="Faixas de áudio"></div>
+      <div id="subtitle-menu" class="player-menu subtitle-menu hidden" aria-label="Configurações de legenda">
+        <label for="subtitle-select">Faixa de legenda</label>
+        <select id="subtitle-select"><option value="">Desativadas</option></select>
+        <div class="subtitle-settings">
+          <span>Sincronia</span>
+          <button id="subtitle-sync-minus" class="menu-option" type="button">− 0,5s</button>
+          <span id="subtitle-sync-value">0,0s</span>
+          <button id="subtitle-sync-plus" class="menu-option" type="button">+ 0,5s</button>
+        </div>
+        <label for="subtitle-size">Tamanho</label>
+        <select id="subtitle-size">
+          <option value="small">Pequena</option>
+          <option value="medium" selected>Média</option>
+          <option value="large">Grande</option>
+        </select>
+      </div>
+    </div>
+  </section>
+  <script src="./webOSTV.js" onerror="void 0"></script>
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
