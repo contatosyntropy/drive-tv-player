@@ -8,7 +8,9 @@
  */
 (() => {
   const video = document.getElementById("video");
+  const FFMPEG_JS = "https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js";
   const CORE_JS = "https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js";
+  const HLS_JS = "https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js";
   const MAX_TEST_SECONDS = 120;
   let ffmpeg = null;
   let hls = null;
@@ -48,6 +50,31 @@
         }
       });
     } catch (_) {}
+  }
+
+  function loadExternalScript(src) {
+    return new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[src="' + src + '"]');
+      if (existing) {
+        if (existing.dataset.loaded === "1") return resolve();
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("Falha ao carregar " + src)), { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = () => { script.dataset.loaded = "1"; resolve(); };
+      script.onerror = () => reject(new Error("Falha ao carregar " + src));
+      document.head.appendChild(script);
+    });
+  }
+
+  async function ensureLibraries() {
+    if (!window.FFmpeg || !window.FFmpeg.createFFmpeg) await loadExternalScript(FFMPEG_JS);
+    if (!window.Hls) await loadExternalScript(HLS_JS);
+    if (!window.FFmpeg || !window.FFmpeg.createFFmpeg) throw new Error("FFmpeg.wasm não foi carregado. Verifique a conexão da TV.");
+    if (!window.Hls) throw new Error("HLS.js não foi carregado. Verifique a conexão da TV.");
   }
 
   async function verifyRangeSource(sourceUrl, expectedSize) {
@@ -521,6 +548,7 @@
 
   async function getFFmpeg() {
     if (ffmpeg) return ffmpeg;
+    await ensureLibraries();
     if (!window.FFmpeg || !window.FFmpeg.createFFmpeg) {
       throw new Error("Biblioteca FFmpeg.wasm não carregou. Verifique a conexão da TV.");
     }
@@ -554,6 +582,7 @@
         throw new Error("Este arquivo tem " + (Number(file.size) / 1000000000).toFixed(2) + " GB. O FFmpeg.wasm 0.11 tem limite documentado de entrada de 2 GB.");
       }
 
+      await ensureLibraries();
       await verifyRangeSource(sourceUrl, file.size);
       const mkvVideoPtsMs = await extractMkvVideoPts(sourceUrl, MAX_TEST_SECONDS);
 
@@ -659,7 +688,7 @@
           const trimmed = line.trim();
           if (trimmed.startsWith("#EXT-X-MAP:")) {
             return trimmed.replace(/URI="([^"]+)"/, (_match, uri) => {
-              return urlsByName[uri] ? \`URI="\${urlsByName[uri]}"\` : \`URI="\${uri}"\`;
+              return urlsByName[uri] ? 'URI="' + urlsByName[uri] + '"' : 'URI="' + uri + '"';
             });
           }
           return urlsByName[trimmed] || line;
