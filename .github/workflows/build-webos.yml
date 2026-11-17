@@ -38,7 +38,7 @@ jobs:
         run: |
           mkdir -p build/webos-app
           cp webos-app/appinfo.json build/webos-app/
-          cp webos-app/index.html webos-app/webOSTV.js webos-app/tv-transcoder.js build/webos-app/
+          cp webos-app/index.html webos-app/webOSTV.js build/webos-app/
           cp styles.css config.js build/webos-app/
           # webOS 6.x runs Chromium 79; transpile syntax introduced after Chrome 79.
           esbuild app.js --target=chrome79 --outfile=build/webos-app/app.js
