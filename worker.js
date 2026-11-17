@@ -5,25 +5,36 @@ let cachedDriveTokenExpiresAt = 0;
 let driveTokenPromise = null;
 
 async function getDriveAccessToken(env) {
+  const clientId = String(env?.GOOGLE_CLIENT_ID || "").trim();
+  const clientSecret = String(env?.GOOGLE_CLIENT_SECRET || "").trim();
+  const refreshToken = String(env?.GOOGLE_REFRESH_TOKEN || "").trim();
+
   if (cachedDriveToken && Date.now() < cachedDriveTokenExpiresAt - 60000) return cachedDriveToken;
   if (driveTokenPromise) return driveTokenPromise;
   driveTokenPromise = (async () => {
-    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REFRESH_TOKEN) {
-      throw new Error("Credenciais OAuth do Google Drive incompletas no Worker.");
+    if (!clientId || !clientSecret || !refreshToken) {
+      const error = new Error("Credenciais OAuth do Google Drive incompletas no Worker.");
+      error.googleError = "missing_oauth_credentials";
+      error.googleErrorDescription = "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REFRESH_TOKEN são obrigatórios.";
+      throw error;
     }
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: env.GOOGLE_CLIENT_ID,
-        client_secret: env.GOOGLE_CLIENT_SECRET,
-        refresh_token: env.GOOGLE_REFRESH_TOKEN,
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
         grant_type: "refresh_token"
       }).toString()
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.access_token) {
-      throw new Error((data.error_description || data.error || "Não foi possível renovar o acesso OAuth.") + " (HTTP " + response.status + ")");
+      const error = new Error(data.error_description || data.error || "Não foi possível renovar o acesso OAuth.");
+      error.googleError = data.error || "oauth_token_request_failed";
+      error.googleErrorDescription = data.error_description || "";
+      error.upstreamStatus = response.status;
+      throw error;
     }
     cachedDriveToken = data.access_token;
     cachedDriveTokenExpiresAt = Date.now() + Number(data.expires_in || 3600) * 1000;
@@ -33,7 +44,8 @@ async function getDriveAccessToken(env) {
   finally { driveTokenPromise = null; }
 }
 
-async function driveJson(url, accessToken) {
+async function driveJson(url, env) {
+  const accessToken = await getDriveAccessToken(env);
   const response = await fetch(url, {
     headers: { Authorization: "Bearer " + accessToken }
   });
@@ -46,7 +58,7 @@ async function driveJson(url, accessToken) {
   return data;
 }
 
-async function isWithinConfiguredFolder(fileId, accessToken) {
+async function isWithinConfiguredFolder(fileId, env) {
   let currentId = fileId;
   const visited = new Set();
   for (let depth = 0; depth < 30 && currentId; depth++) {
@@ -56,7 +68,7 @@ async function isWithinConfiguredFolder(fileId, accessToken) {
     const metadataUrl = new URL("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(currentId));
     metadataUrl.searchParams.set("fields", "id,mimeType,parents,trashed");
     metadataUrl.searchParams.set("supportsAllDrives", "true");
-    const metadata = await driveJson(metadataUrl.toString(), accessToken);
+    const metadata = await driveJson(metadataUrl.toString(), env);
     if (metadata.trashed || !metadata.parents || !metadata.parents.length) return false;
     currentId = metadata.parents[0];
   }
@@ -84,7 +96,8 @@ function jsonError(message, status = 502, details = {}) {
   });
 }
 
-async function fetchDriveMedia(request, fileId, accessToken) {
+async function fetchDriveMedia(request, fileId, env) {
+  const accessToken = await getDriveAccessToken(env);
   const headers = new Headers();
   for (const name of ["Range", "If-Range"]) {
     const value = request.headers.get(name);
@@ -145,9 +158,9 @@ async function fetchDriveMedia(request, fileId, accessToken) {
 
   return primary;
 }
-async function proxyDriveFile(request, url, fileId, accessToken, mode, fileName = "") {
+async function proxyDriveFile(request, url, fileId, env, mode, fileName = "") {
   try {
-    const upstream = await fetchDriveMedia(request, fileId, accessToken);
+    const upstream = await fetchDriveMedia(request, fileId, env);
     const contentType = upstream.headers.get("Content-Type") || "";
     if (!upstream.ok && contentType.includes("application/json")) {
       const data = await upstream.json().catch(() => ({}));
@@ -218,7 +231,7 @@ async function proxyDriveFile(request, url, fileId, accessToken, mode, fileName 
       headers: responseHeaders
     });
   } catch (error) {
-    return jsonError("Falha de comunicação com o Google Drive: " + error.message, 502);
+    return jsonError("Falha de comunicação com o Google Drive: " + error.message, 502, error.googleError ? { error: error.googleError, error_description: error.googleErrorDescription || "" } : {});
   }
 }
 
@@ -253,16 +266,9 @@ export default {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
       }
 
-      let accessToken;
-      try {
-        accessToken = await getDriveAccessToken(env);
-      } catch (error) {
-        return jsonError("Falha na autenticação do Google Drive: " + error.message, 502);
-      }
-
       if (url.pathname === "/api/files") {
         const folderId = url.searchParams.get("folderId") || DRIVE_ROOT_FOLDER_ID;
-        if (!await isWithinConfiguredFolder(folderId, accessToken)) {
+        if (!await isWithinConfiguredFolder(folderId, env)) {
           return jsonError("Pasta fora da biblioteca autorizada.", 403);
         }
         const query = "'" + folderId.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "' in parents and trashed = false";
@@ -276,7 +282,7 @@ export default {
         const pageToken = url.searchParams.get("pageToken");
         if (pageToken) listUrl.searchParams.set("pageToken", pageToken);
         try {
-          const data = await driveJson(listUrl.toString(), accessToken);
+          const data = await driveJson(listUrl.toString(), env);
           return new Response(JSON.stringify(data), { status: 200, headers: JSON_HEADERS });
         } catch (error) {
           return jsonError(error.message, error.status || 502);
@@ -289,18 +295,18 @@ export default {
       if (!match) return jsonError("Rota de mídia não encontrada.", 404);
 
       try {
-        if (!await isWithinConfiguredFolder(match[1], accessToken)) {
+        if (!await isWithinConfiguredFolder(match[1], env)) {
           return jsonError("Arquivo fora da biblioteca autorizada.", 403);
         }
       } catch (error) {
-        return jsonError("Não foi possível validar o arquivo no Google Drive: " + error.message, error.status || 502);
+        return jsonError("Não foi possível validar o arquivo no Google Drive: " + error.message, error.status || 502, error.googleError ? { error: error.googleError, error_description: error.googleErrorDescription || "" } : {});
       }
 
       return proxyDriveFile(
         request,
         url,
         match[1],
-        accessToken,
+        env,
         videoMatch ? "video" : "subtitle",
         videoMatch && videoMatch[2] ? decodeURIComponent(videoMatch[2]) : ""
       );
