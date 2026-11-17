@@ -69,21 +69,24 @@ async function proxyDriveFile(request, fileId, apiKey, mode, fileName = "") {
     }
 
     if (mode === "video") {
+      const mimeOverride = url.searchParams.get("mime");
       const extension = (fileName.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
-      // O Chromium do webOS rejeita video/x-matroska antes de passar ao hardware GStreamer da TV.
-      // Servir como video/mp4 libera o stream para o decodificador nativo inspecionar o container real.
       const mimeTypes = {
-        mkv: "video/mp4",
+        mkv: "video/webm",
+        webm: "video/webm",
         mp4: "video/mp4",
         m4v: "video/mp4",
         mov: "video/mp4",
-        webm: "video/webm",
         avi: "video/x-msvideo",
         mpg: "video/mpeg",
         mpeg: "video/mpeg",
         ts: "video/mp2t"
       };
-      if (mimeTypes[extension]) responseHeaders.set("Content-Type", mimeTypes[extension]);
+      if (mimeOverride === "matroska") {
+        responseHeaders.set("Content-Type", "video/x-matroska");
+      } else if (mimeTypes[extension]) {
+        responseHeaders.set("Content-Type", mimeTypes[extension]);
+      }
       responseHeaders.set("Accept-Ranges", "bytes");
       responseHeaders.set("Content-Disposition", "inline");
     }
