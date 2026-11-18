@@ -67,6 +67,24 @@ const folderValidationInFlight = new Map();
 const FOLDER_VALIDATION_TTL_MS = 60 * 1000;
 const FOLDER_VALIDATION_CACHE_LIMIT = 500;
 
+function cacheAuthorizedFile(fileId) {
+  if (!fileId) return;
+  const now = Date.now();
+  for (const [key, entry] of folderValidationCache) {
+    if (entry.expiresAt <= now) folderValidationCache.delete(key);
+  }
+  if (!folderValidationCache.has(fileId)) {
+    while (folderValidationCache.size >= FOLDER_VALIDATION_CACHE_LIMIT) {
+      const oldestKey = folderValidationCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      folderValidationCache.delete(oldestKey);
+    }
+  } else {
+    folderValidationCache.delete(fileId);
+  }
+  folderValidationCache.set(fileId, { expiresAt: now + FOLDER_VALIDATION_TTL_MS });
+}
+
 async function isWithinConfiguredFolder(fileId, env) {
   if (!fileId) return false;
 
@@ -105,18 +123,7 @@ async function isWithinConfiguredFolder(fileId, env) {
     }
 
     // Não armazenamos recusas nem erros: somente uma autorização confirmada.
-    if (allowed) {
-      const cacheNow = Date.now();
-      for (const [key, entry] of folderValidationCache) {
-        if (entry.expiresAt <= cacheNow) folderValidationCache.delete(key);
-      }
-      while (folderValidationCache.size >= FOLDER_VALIDATION_CACHE_LIMIT) {
-        const oldestKey = folderValidationCache.keys().next().value;
-        if (oldestKey === undefined) break;
-        folderValidationCache.delete(oldestKey);
-      }
-      folderValidationCache.set(fileId, { expiresAt: cacheNow + FOLDER_VALIDATION_TTL_MS });
-    }
+    if (allowed) cacheAuthorizedFile(fileId);
 
     return allowed;
   })();
@@ -337,6 +344,16 @@ export default {
         if (pageToken) listUrl.searchParams.set("pageToken", pageToken);
         try {
           const data = await driveJson(listUrl.toString(), env);
+
+          // A consulta já foi limitada a filhos diretos de uma pasta autorizada.
+          // Pré-autoriza esses IDs para que a primeira abertura do vídeo não
+          // precise fazer outra consulta de metadados antes do streaming.
+          for (const file of data.files || []) {
+            if (file.id && Array.isArray(file.parents) && file.parents.includes(folderId)) {
+              cacheAuthorizedFile(file.id);
+            }
+          }
+
           return new Response(JSON.stringify(data), { status: 200, headers: JSON_HEADERS });
         } catch (error) {
           return jsonError(error.message, error.status || 502);
