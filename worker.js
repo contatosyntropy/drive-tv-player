@@ -59,21 +59,74 @@ async function driveJson(url, env) {
   return data;
 }
 
+// A validação de pertencimento é repetida em cada requisição HTTP Range.
+ // Mantemos somente autorizações positivas por um período curto para evitar
+ // consultas de metadados redundantes durante a reprodução e os seeks.
+const folderValidationCache = new Map();
+const folderValidationInFlight = new Map();
+const FOLDER_VALIDATION_TTL_MS = 60 * 1000;
+const FOLDER_VALIDATION_CACHE_LIMIT = 500;
+
 async function isWithinConfiguredFolder(fileId, env) {
-  let currentId = fileId;
-  const visited = new Set();
-  for (let depth = 0; depth < 30 && currentId; depth++) {
-    if (currentId === DRIVE_ROOT_FOLDER_ID) return true;
-    if (visited.has(currentId)) return false;
-    visited.add(currentId);
-    const metadataUrl = new URL("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(currentId));
-    metadataUrl.searchParams.set("fields", "id,mimeType,parents,trashed");
-    metadataUrl.searchParams.set("supportsAllDrives", "true");
-    const metadata = await driveJson(metadataUrl.toString(), env);
-    if (metadata.trashed || !metadata.parents || !metadata.parents.length) return false;
-    currentId = metadata.parents[0];
+  if (!fileId) return false;
+
+  const now = Date.now();
+  const cached = folderValidationCache.get(fileId);
+  if (cached && cached.expiresAt > now) {
+    // Atualiza a posição no Map para manter os itens mais usados.
+    folderValidationCache.delete(fileId);
+    folderValidationCache.set(fileId, cached);
+    return true;
   }
-  return false;
+  if (cached) folderValidationCache.delete(fileId);
+
+  const pending = folderValidationInFlight.get(fileId);
+  if (pending) return pending;
+
+  const validation = (async () => {
+    let currentId = fileId;
+    const visited = new Set();
+    let allowed = false;
+
+    for (let depth = 0; depth < 30 && currentId; depth++) {
+      if (currentId === DRIVE_ROOT_FOLDER_ID) {
+        allowed = true;
+        break;
+      }
+      if (visited.has(currentId)) break;
+      visited.add(currentId);
+
+      const metadataUrl = new URL("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(currentId));
+      metadataUrl.searchParams.set("fields", "id,mimeType,parents,trashed");
+      metadataUrl.searchParams.set("supportsAllDrives", "true");
+      const metadata = await driveJson(metadataUrl.toString(), env);
+      if (metadata.trashed || !metadata.parents || !metadata.parents.length) break;
+      currentId = metadata.parents[0];
+    }
+
+    // Não armazenamos recusas nem erros: somente uma autorização confirmada.
+    if (allowed) {
+      const cacheNow = Date.now();
+      for (const [key, entry] of folderValidationCache) {
+        if (entry.expiresAt <= cacheNow) folderValidationCache.delete(key);
+      }
+      while (folderValidationCache.size >= FOLDER_VALIDATION_CACHE_LIMIT) {
+        const oldestKey = folderValidationCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        folderValidationCache.delete(oldestKey);
+      }
+      folderValidationCache.set(fileId, { expiresAt: cacheNow + FOLDER_VALIDATION_TTL_MS });
+    }
+
+    return allowed;
+  })();
+
+  folderValidationInFlight.set(fileId, validation);
+  try {
+    return await validation;
+  } finally {
+    folderValidationInFlight.delete(fileId);
+  }
 }
 
 const CORS_HEADERS = {
