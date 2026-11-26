@@ -400,8 +400,53 @@ export default {
         });
       }
 
-      if (url.pathname.startsWith("/api/oauth/")) {
-        return new Response("Autorização OAuth já concluída. Esta rota foi desativada.", { status: 410 });
+      if (url.pathname === "/api/oauth/start") {
+        if (env && env.GOOGLE_REFRESH_TOKEN) {
+          return new Response("GOOGLE_REFRESH_TOKEN já está configurado. Remova temporariamente o secret para iniciar uma nova autorização.", { status: 403 });
+        }
+        if (!env || !env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+          return new Response("Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET na Cloudflare antes de acessar.", { status: 400 });
+        }
+        const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+        authUrl.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
+        authUrl.searchParams.set("redirect_uri", url.origin + "/api/oauth/callback");
+        authUrl.searchParams.set("response_type", "code");
+        authUrl.searchParams.set("scope", "https://www.googleapis.com/auth/drive.readonly");
+        authUrl.searchParams.set("access_type", "offline");
+        authUrl.searchParams.set("prompt", "consent");
+        return Response.redirect(authUrl.toString(), 302);
+      }
+
+      if (url.pathname === "/api/oauth/callback") {
+        if (env && env.GOOGLE_REFRESH_TOKEN) {
+          return new Response("GOOGLE_REFRESH_TOKEN já está configurado. O fluxo de autorização está bloqueado.", { status: 403 });
+        }
+        if (!env || !env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+          return new Response("Credenciais OAuth incompletas no Worker.", { status: 400 });
+        }
+        const code = url.searchParams.get("code");
+        if (!code) {
+          return new Response("Autorização não concluída: " + (url.searchParams.get("error") || "código ausente"), { status: 400 });
+        }
+        const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            code,
+            client_id: env.GOOGLE_CLIENT_ID,
+            client_secret: env.GOOGLE_CLIENT_SECRET,
+            redirect_uri: url.origin + "/api/oauth/callback",
+            grant_type: "authorization_code"
+          }).toString()
+        });
+        const data = await tokenResp.json().catch(() => ({}));
+        if (!tokenResp.ok || !data.refresh_token) {
+          return new Response("Falha ao obter Refresh Token. HTTP " + tokenResp.status + ": " + (data.error_description || data.error || "o Google não retornou refresh_token."), { status: 400 });
+        }
+        return new Response(
+          "<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Token gerado</title><body style=\"font:16px system-ui;max-width:760px;margin:48px auto;padding:0 20px;background:#10131a;color:#e8edf5\"><h1>Autorização concluída</h1><p>Copie o valor abaixo e salve-o no Cloudflare como o secret <strong>GOOGLE_REFRESH_TOKEN</strong>. Não compartilhe este valor.</p><textarea readonly style=\"width:100%;min-height:130px;padding:12px;box-sizing:border-box\">" + data.refresh_token + "</textarea><p>Depois de salvar o novo secret, teste <a style=\"color:#9abaff\" href=\"/api/files\">/api/files</a>. Esta página contém uma credencial privada.</p></body></html>",
+          { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" } }
+        );
       }
 
       if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
