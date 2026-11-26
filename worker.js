@@ -296,6 +296,91 @@ async function proxyDriveFile(request, url, fileId, env, mode, fileName = "") {
   }
 }
 
+
+const PUBLIC_PAGE_HEADERS = {
+  "Content-Type": "text/html; charset=utf-8",
+  "Cache-Control": "public, max-age=3600",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+};
+
+function publicPage(title, content) {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="index,follow">
+  <title>${title} — Drive TV Player</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#10131a;color:#e8edf5}
+    *{box-sizing:border-box}body{margin:0;padding:40px 18px;line-height:1.65}
+    main{max-width:820px;margin:0 auto;background:#191f2b;border:1px solid #30394a;border-radius:18px;padding:clamp(22px,5vw,48px)}
+    header{margin-bottom:32px}a{color:#9abaff}nav{display:flex;gap:18px;flex-wrap:wrap;margin:18px 0 30px}
+    h1{font-size:clamp(1.8rem,5vw,2.5rem);line-height:1.2;margin:0 0 8px}
+    h2{font-size:1.2rem;margin:30px 0 8px;color:#fff}p,li{color:#c7d0df}
+    .eyebrow{color:#9abaff;font-size:.82rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+    footer{margin-top:36px;padding-top:18px;border-top:1px solid #30394a;color:#9aa7ba;font-size:.9rem}
+  </style>
+</head>
+<body>
+<main>
+  <header><div class="eyebrow">Aplicativo pessoal</div><h1>Drive TV Player</h1><p>Reprodução de vídeos da biblioteca do Google Drive em uma televisão LG com webOS.</p></header>
+  <nav aria-label="Navegação principal"><a href="/">Início</a><a href="/privacy">Política de Privacidade</a><a href="/terms">Termos de Serviço</a></nav>
+  <article><h1>${title}</h1>${content}</article>
+  <footer>Drive TV Player · Última atualização: 26 de novembro de 2026</footer>
+</main>
+</body>
+</html>`;
+}
+
+const PUBLIC_PAGES = {
+  "/": publicPage("Sobre o aplicativo", `
+    <p>O Drive TV Player é um aplicativo de uso pessoal que permite navegar por uma pasta selecionada do Google Drive e reproduzir na televisão vídeos e arquivos de legenda armazenados nessa biblioteca.</p>
+    <p>Para funcionar, o aplicativo utiliza a autorização da conta Google do próprio usuário. Os nomes, identificadores e metadados dos arquivos são consultados para montar a biblioteca; o conteúdo de vídeo e das legendas é transmitido sob solicitação para a televisão.</p>
+    <p>O aplicativo não oferece catálogo próprio, não hospeda vídeos e não disponibiliza conteúdo de terceiros. O usuário escolhe os arquivos a partir do seu próprio Google Drive.</p>
+    <p>Leia como os dados são tratados na <a href="/privacy">Política de Privacidade</a> e as condições de uso nos <a href="/terms">Termos de Serviço</a>.</p>
+  `),
+  "/privacy": publicPage("Política de Privacidade", `
+    <p>Esta Política de Privacidade descreve como o Drive TV Player acessa e trata informações quando o usuário conecta sua conta Google para reproduzir arquivos do Google Drive.</p>
+    <h2>Informações acessadas</h2>
+    <p>Mediante autorização do usuário, o aplicativo acessa informações necessárias para localizar e reproduzir arquivos dentro da biblioteca configurada no Google Drive, incluindo nomes, identificadores, tipos, tamanhos, pastas e metadados disponíveis dos arquivos. Quando solicitado, também acessa o conteúdo dos vídeos e arquivos de legenda escolhidos pelo usuário.</p>
+    <h2>Como as informações são utilizadas</h2>
+    <p>Essas informações são utilizadas exclusivamente para listar a biblioteca, validar que os arquivos pertencem à pasta configurada e transmitir o vídeo ou a legenda para o dispositivo de reprodução. O aplicativo não utiliza os dados do Google para publicidade, perfilamento ou venda de informações.</p>
+    <h2>Armazenamento e compartilhamento</h2>
+    <p>O Drive TV Player não mantém uma cópia própria dos vídeos ou das legendas nem oferece armazenamento permanente do conteúdo. As solicitações passam pelo serviço de infraestrutura Cloudflare e pelos serviços do Google necessários para autenticação e acesso ao Drive. As credenciais OAuth usadas pelo serviço são mantidas como segredos de ambiente do Worker e não são exibidas na interface do player.</p>
+    <p>O aplicativo não vende dados pessoais nem compartilha dados do Google com terceiros para finalidades independentes. O tráfego é processado apenas para fornecer a funcionalidade solicitada pelo usuário e pela infraestrutura técnica envolvida.</p>
+    <h2>Controle e revogação do acesso</h2>
+    <p>O usuário pode revogar a autorização do aplicativo nas configurações de segurança da Conta Google, na seção de conexões com apps e serviços de terceiros. A remoção das credenciais OAuth configuradas no serviço também interrompe o acesso ao Drive.</p>
+    <h2>Segurança</h2>
+    <p>As comunicações com o Google e com o serviço de reprodução utilizam HTTPS. Nenhum sistema de transmissão pela internet pode garantir segurança absoluta, mas o aplicativo busca limitar o acesso aos arquivos à biblioteca configurada e utilizar as credenciais apenas no servidor.</p>
+    <h2>Dados de crianças</h2>
+    <p>O aplicativo é uma ferramenta de uso pessoal e não é direcionado a crianças.</p>
+    <h2>Alterações e contato</h2>
+    <p>Esta política poderá ser atualizada para refletir mudanças no funcionamento do aplicativo. A versão vigente estará disponível nesta página.</p>
+    <p>O uso e a transferência de informações recebidas das APIs do Google para qualquer outro aplicativo seguirão a <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener noreferrer">Política de Dados do Usuário dos Serviços de API do Google</a>, incluindo os requisitos de uso limitado (Limited Use).</p>
+  `),
+  "/terms": publicPage("Termos de Serviço", `
+    <h2>1. Finalidade</h2>
+    <p>O Drive TV Player é uma ferramenta de uso pessoal destinada a navegar e reproduzir, em dispositivos compatíveis, arquivos que o próprio usuário pode acessar em sua conta Google Drive.</p>
+    <h2>2. Conta e autorização</h2>
+    <p>O usuário é responsável pela conta Google conectada, pela autorização concedida ao aplicativo e pela proteção de suas credenciais. O acesso depende da disponibilidade dos serviços do Google e da Cloudflare.</p>
+    <h2>3. Direitos sobre o conteúdo</h2>
+    <p>O usuário declara que possui os direitos ou as permissões necessárias para acessar e reproduzir os arquivos selecionados. O aplicativo não concede licença sobre vídeos, áudios, legendas ou quaisquer outros conteúdos armazenados no Google Drive.</p>
+    <h2>4. Uso permitido</h2>
+    <p>O aplicativo deve ser utilizado de forma lícita e pessoal. É proibido utilizá-lo para violar direitos autorais, contornar controles de acesso, acessar arquivos sem autorização ou prejudicar os serviços de terceiros.</p>
+    <h2>5. Disponibilidade</h2>
+    <p>O aplicativo é fornecido no estado em que se encontra, sem garantia de disponibilidade contínua, compatibilidade com todos os formatos ou funcionamento ininterrupto. Alterações nas APIs, nos serviços de terceiros, na rede ou nos dispositivos podem afetar a reprodução.</p>
+    <h2>6. Serviços de terceiros</h2>
+    <p>O funcionamento depende de serviços fornecidos pelo Google e pela Cloudflare, que possuem termos e políticas próprios. O Drive TV Player não controla nem garante a disponibilidade desses serviços.</p>
+    <h2>7. Limitação de responsabilidade</h2>
+    <p>Na máxima extensão permitida pela legislação aplicável, o responsável pelo aplicativo não será responsável por indisponibilidades, perda de acesso decorrente de serviços de terceiros ou uso não autorizado da conta ou dos conteúdos pelo próprio usuário.</p>
+    <h2>8. Alterações dos termos</h2>
+    <p>Estes termos podem ser atualizados quando necessário. A versão vigente será publicada nesta página. O uso continuado do aplicativo após uma atualização representa ciência dos termos revisados.</p>
+  `)
+};
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -381,6 +466,11 @@ export default {
         videoMatch ? "video" : "subtitle",
         videoMatch && videoMatch[2] ? decodeURIComponent(videoMatch[2]) : ""
       );
+    }
+
+    const publicPageHtml = PUBLIC_PAGES[url.pathname];
+    if (publicPageHtml) {
+      return new Response(publicPageHtml, { status: 200, headers: PUBLIC_PAGE_HEADERS });
     }
 
     return env.ASSETS.fetch(request);
